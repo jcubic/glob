@@ -162,14 +162,21 @@ export class Parser {
       return new Root(ident);
     }
 
-    // a relative pattern: anchored to the caller supplied cwd. parse() rejects
-    // these today, because parsePath() only accepts segments introduced by a
-    // separator — see "Known limitations" in the README.
-    return new Root(this.cwd);
+    // a relative pattern, anchored to the caller supplied cwd. the empty string
+    // stands for "no base", which is what keeps a root of this kind distinct
+    // from the POSIX one
+    return new Root(this.cwd ?? '');
   }
 
   private parsePath(): Path {
-    const items: Segment[] = [this.parseRoot()];
+    const root = this.parseRoot();
+    const items: Segment[] = [root];
+
+    // a relative pattern opens with a segment rather than a separator, so the
+    // first one is not introduced by the loop below
+    if (root.isRelative && this.currentToken.kind !== TokenKind.PathSeparator) {
+      items.push(this.parseSegment());
+    }
 
     while (this.currentToken.kind === TokenKind.PathSeparator) {
       this.acceptIt();

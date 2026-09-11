@@ -150,22 +150,23 @@ new Glob({ fs: memfs as unknown as GlobFs });
 | -------- | ---------------------------------------------------- |
 | `*`      | any run of characters                                |
 | `?`      | exactly one character                                |
-| `**`     | any number of directory levels                       |
+| `**`     | any number of directory levels, including none       |
 | `[abcd]` | one character from the set                           |
 | `{a,b}`  | any one of the comma separated alternatives          |
 | `/`, `\` | path separator — both are accepted on every platform |
 | `c:/`    | a Windows drive root                                 |
 
-Patterns must be absolute — either POSIX (`/usr/lib/*.so`) or a Windows drive (`c:/windows/*.dll`).
+A pattern may be absolute — POSIX (`/usr/lib/*.so`) or a Windows drive (`c:/windows/*.dll`) — or
+relative (`src/**/*.ts`), in which case it resolves against `cwd`.
 
 ## API
 
 ### new Glob(options)
 
-| Option | Type     | Description                                                   |
-| ------ | -------- | ------------------------------------------------------------- |
-| `fs`   | `GlobFs` | **Required.** The filesystem to search.                       |
-| `cwd`  | `string` | Directory relative patterns anchor to. See Known limitations. |
+| Option | Type     | Description                                                     |
+| ------ | -------- | --------------------------------------------------------------- |
+| `fs`   | `GlobFs` | **Required.** The filesystem to search.                         |
+| `cwd`  | `string` | Directory relative patterns resolve against. Defaults to `'.'`. |
 
 Throws a `TypeError` if `fs` is missing or does not provide `readdir` and `stat`.
 
@@ -204,23 +205,46 @@ import { Parser, Scanner, Token, TokenKind, Ast } from 'isomorphic-glob';
 
 const path = new Parser('/hello/**/you?/*.rb').parse();
 
-path.text(); //=> '//hello/**/you?/*.rb'
-path.toString(); //=> '/hello/.*/you.{1}/.*\\.rb'
-path.items[3] instanceof Ast.WildcardSegment; //=> true
+path.text(); //=> '/hello/**/you?/*.rb'
+path.toString(); //=> '^[/\\]hello[/\\](?:[^/\\]+[/\\])*you[^/\\][/\\][^/\\]*\.rb$'
+path.items[2] instanceof Ast.WildcardSegment; //=> true
 ```
 
-## Known limitations
+`Path#toString()` returns an **anchored** expression, so `new RegExp(path.toString())` behaves the
+same way `match()` does.
 
-These behaviours are inherited from the original implementation and are pinned by
-`test/known-issues.test.ts`:
+## Matching rules
 
-- the generated regular expression is not anchored, so `match('/tmp/*.js', '/tmp/foo.jsx')` is
-  `true`
-- `*` compiles to `.*` and therefore crosses `/`
-- only the first `.` of an identifier is escaped, so `b.c.d` compiles to `b\.c.d`
-- a leading `**` always consumes at least one directory level, unlike bash's `globstar`
-- relative patterns are not supported and throw `Expected EOT`, so the `cwd` option has no effect
-  yet
+Matching follows bash with `globstar` enabled. `test/regressions.test.ts` pins each rule, and the
+expansion results are verified against real bash output.
+
+- **Patterns are anchored.** They match a whole path, not a substring, so `/tmp/*.js` rejects
+  `/tmp/foo.jsx` and `xxx/tmp/foo.js`.
+- **`*` and `?` stop at a separator.** `/tmp/*.js` does not match `/tmp/a/foo.js`. Use `**` to
+  cross directory levels.
+- **`**` matches zero or more levels.** `/a/**/b.js` matches `/a/b.js` as well as `/a/x/y/b.js`. A
+  trailing `**` covers everything below, the directory itself included — the same set bash lists.
+- **Literal text is escaped.** Every `.` in a pattern is a real dot, so `b.c.d` does not match
+  `b.cXd`. Inside a character set `-` stays meaningful, so `[a-z]` is still a range.
+- **Either separator matches either separator.** `c:/windows/*.dll` matches
+  `c:\windows\user32.dll`, on every platform.
+
+### Relative patterns
+
+A pattern without a leading `/` or drive is relative, and resolves against `cwd`:
+
+```js
+const glob = new Glob({ fs, cwd: '/home/user/project' });
+
+await glob.expand('src/**/*.ts');
+```
+
+`match()` compares a relative pattern against a relative string, with no `cwd` involved:
+
+```js
+match('src/*.ts', 'src/index.ts'); //=> true
+match('src/*.ts', '/src/index.ts'); //=> false
+```
 
 ## Development
 

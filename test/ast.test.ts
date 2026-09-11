@@ -54,9 +54,12 @@ describe('AST', () => {
     it('describes a posix root', () => {
       const root = new Root();
 
-      expect(root.text()).toBe('/');
+      // a root contributes whatever comes before the first separator, which for
+      // a posix path is nothing — the '/' belongs to the segment after it
+      expect(root.text()).toBe('');
       expect(root.toString()).toBe('');
       expect(root.isWildcard()).toBe(false);
+      expect(root.isRelative).toBe(false);
     });
 
     it('describes a windows drive root', () => {
@@ -64,13 +67,18 @@ describe('AST', () => {
 
       expect(root.text()).toBe('c:');
       expect(root.toString()).toBe('c:');
+      expect(root.isRelative).toBe(false);
     });
 
     it('describes a working-directory root', () => {
       const root = new Root('/home/user');
 
       expect(root.text()).toBe('/home/user');
-      expect(root.toString()).toBe('/home/user');
+      expect(root.isRelative).toBe(true);
+    });
+
+    it('escapes the working directory when compiled to a regex', () => {
+      expect(new Root('/home/a.b').toString()).toBe('/home/a\\.b');
     });
   });
 

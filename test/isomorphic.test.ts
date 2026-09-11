@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import { Glob } from '../src/glob.js';
+import { match } from '../src/match.js';
 import type { GlobFsPromises } from '../src/fs.js';
 
 function fail(code: string, message: string): never {
@@ -57,14 +58,24 @@ function createMemoryFs(files: string[]): GlobFsPromises {
   };
 }
 
-const memoryFs = createMemoryFs([
+const FILES = [
   '/project/a.js',
   '/project/b.txt',
   '/project/sub/c.js',
   '/project/sub/nested/d.js',
   '/project/other/e.js',
   '/project/my.dir/f.js',
-]);
+];
+
+const DIRECTORIES = [
+  '/project',
+  '/project/sub',
+  '/project/sub/nested',
+  '/project/other',
+  '/project/my.dir',
+];
+
+const memoryFs = createMemoryFs(FILES);
 
 describe('platform independence', () => {
   const glob = new Glob({ fs: memoryFs });
@@ -77,6 +88,7 @@ describe('platform independence', () => {
     const matches = await glob.expand('/project/**/*.js');
 
     expect(matches.toSorted()).toEqual([
+      '/project/a.js',
       '/project/my.dir/f.js',
       '/project/other/e.js',
       '/project/sub/c.js',
@@ -97,6 +109,40 @@ describe('platform independence', () => {
 
   it('propagates the filesystem error for a missing directory', async () => {
     await expect(glob.expand('/project/nope/*.js')).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  /**
+   * `expand` prunes the walk segment by segment while `match` compiles one
+   * regex for the whole path — two separate code paths that must not drift
+   * apart. Searching the tree has to give the same answer as filtering every
+   * path in it.
+   */
+  describe('expand agrees with match', () => {
+    const everything = [...FILES, ...DIRECTORIES].toSorted();
+
+    const patterns = [
+      '/project/*.js',
+      '/project/*',
+      '/project/*.rb',
+      '/project/**/*.js',
+      '/project/**',
+      '/project/sub/**',
+      '/project/{a,b}.*',
+      '/project/[ab].*',
+      '/project/?.js',
+      '/project/sub/*.js',
+      '/project/*/nested/*.js',
+      '/project/**/nested/*.js',
+      '/project/my.dir/*.js',
+      '/project/**/*.txt',
+    ];
+
+    it.each(patterns)('%s', async (pattern) => {
+      const expanded = (await glob.expand(pattern)).toSorted();
+      const filtered = everything.filter((entry) => match(pattern, entry));
+
+      expect(expanded).toEqual(filtered);
+    });
   });
 
   describe('the source', () => {

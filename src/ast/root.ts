@@ -1,27 +1,38 @@
 import { Segment } from './segment.js';
 import type { Identifier } from './identifier.js';
+import { escapeRegExp } from '../regex.js';
 
 /**
- * The anchor a pattern is resolved against.
+ * The anchor a pattern is resolved against, in one of three kinds:
  *
- * - no value — a POSIX absolute path (`/usr/lib`)
+ * - `undefined` — a POSIX absolute path (`/usr/lib`)
  * - an {@link Identifier} — a Windows drive (`c:/windows`)
- * - a string — the current working directory, for relative patterns
+ * - a string — the directory a relative pattern (`src/*.ts`) resolves against,
+ *   empty when the caller supplied none
+ *
+ * Unlike the other segments, a root contributes no separator of its own: it is
+ * whatever comes *before* the first `/`, which for a POSIX path is nothing.
  */
 export class Root extends Segment {
   constructor(readonly value?: Identifier | string) {
     super([]);
   }
 
-  override text(): string {
-    if (this.value !== undefined) {
-      if (typeof this.value === 'string') {
-        return this.value; // cwd
-      }
+  /** True when the pattern was written without a leading separator or drive. */
+  get isRelative(): boolean {
+    return typeof this.value === 'string';
+  }
 
-      return `${this.value.text()}:`; // windows
+  override text(): string {
+    if (this.value === undefined) {
+      return ''; // posix, the leading '/' belongs to the first segment
     }
-    return '/'; // linux
+
+    if (typeof this.value === 'string') {
+      return this.value; // the cwd a relative pattern hangs off
+    }
+
+    return `${this.value.text()}:`; // windows drive
   }
 
   override isWildcard(): boolean {
@@ -29,13 +40,6 @@ export class Root extends Segment {
   }
 
   override toString(): string {
-    if (this.value !== undefined) {
-      if (typeof this.value === 'string') {
-        return this.value; // cwd
-      }
-
-      return `${this.value.text()}:`; // windows
-    }
-    return ''; // linux
+    return escapeRegExp(this.text());
   }
 }

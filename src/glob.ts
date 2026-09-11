@@ -12,10 +12,7 @@ export interface GlobOptions {
    */
   fs: GlobFs;
   /**
-   * Directory that relative patterns resolve against.
-   *
-   * Relative patterns are not supported yet (see the README), so this is
-   * currently only recorded on the parsed root.
+   * Directory that relative patterns resolve against. Defaults to `'.'`.
    */
   cwd?: string | undefined;
 }
@@ -30,7 +27,7 @@ export interface GlobOptions {
  */
 export class Glob {
   readonly #fs: GlobFsPromises;
-  readonly #cwd: string | undefined;
+  readonly #cwd: string;
 
   constructor(options: GlobOptions) {
     if (!options?.fs) {
@@ -38,7 +35,7 @@ export class Glob {
     }
 
     this.#fs = toPromises(options.fs);
-    this.#cwd = options.cwd;
+    this.#cwd = options.cwd ?? '.';
   }
 
   /**
@@ -52,29 +49,43 @@ export class Glob {
   async expand(pattern: string): Promise<string[]> {
     const path = new Parser(pattern, { cwd: this.#cwd }).parse();
     const segments = [...path.items];
-    const literal: string[] = [];
 
-    // the leading literal segments are not searched, they are where we start.
-    // they are taken as source text, not as the compiled regex, so that a
-    // directory like `my.dir` is not turned into `my\.dir`
+    // the leading literal segments are not searched, they are where the walk
+    // starts. they are taken as source text, not as the compiled regex, so that
+    // a directory like `my.dir` is not turned into `my\.dir`
+    let start = '';
+    let separator = false;
+
     while (segments.length > 0) {
-      const segment = segments.shift() as Segment;
+      const segment = segments[0] as Segment;
       if (segment.isWildcard()) {
-        segments.unshift(segment);
         break;
       }
-      literal.push(segment instanceof Root ? segment.toString() : segment.text());
-    }
+      segments.shift();
 
-    const root = literal.join('/');
+      if (segment instanceof Root) {
+        start = segment.text();
+        // a POSIX root is empty but still introduces a separator; a relative
+        // pattern with no base does not
+        separator = !(segment.isRelative && start === '');
+        continue;
+      }
+
+      if (separator) {
+        start += '/';
+      }
+      start += segment.text();
+      separator = true;
+    }
 
     // nothing to expand — the pattern either names an existing path or matches
     // nothing at all
     if (segments.length === 0) {
-      return (await this.#exists(root)) ? [root] : [];
+      const literal = start === '' ? '/' : start;
+      return (await this.#exists(literal)) ? [literal] : [];
     }
 
-    return this.#walk(withSlash(root), segments);
+    return this.#walk(start === '' ? '/' : start, segments);
   }
 
   async #exists(path: string): Promise<boolean> {
@@ -86,57 +97,16 @@ export class Glob {
     }
   }
 
-  async #walk(dir: string, segments: Segment[]): Promise<string[]> {
-    const list = await this.#fs.readdir(dir);
-
-    const rest = [...segments];
-    const segment = rest.shift() as Segment;
-    const re = new RegExp(segment.toString());
-
-    // `**` can span several levels, so put it back and deal with it per entry
-    const directoryWildcard = segment instanceof WildcardSegment;
-    if (directoryWildcard) {
-      rest.unshift(segment);
-    }
-
-    const results: string[] = [];
-
-    await Promise.all(
-      list.map(async (entry) => {
-        const matched = re.test(entry);
-        const file = withSlash(dir) + entry;
-
-        if (await this.#isDirectory(file)) {
-          let min = 0;
-
-          if (directoryWildcard) {
-            // recurse keeping the `**`, so it can consume another level
-            results.push(...(await this.#subwalk(file, rest.slice(0))));
-            min++;
-          }
-
-          // ...and recurse without it
-          if (rest.length > min && (min === 1 || matched)) {
-            results.push(...(await this.#subwalk(file, rest.slice(min))));
-            return;
-          }
-        }
-
-        if (matched && rest.length === 0) {
-          results.push(file);
-        }
-      }),
-    );
-
-    return results;
-  }
-
   async #isDirectory(path: string): Promise<boolean> {
     try {
       return (await this.#fs.stat(path)).isDirectory();
     } catch {
       return false;
     }
+  }
+
+  async #walk(dir: string, segments: Segment[]): Promise<string[]> {
+    return this.#collect(dir, segments, await this.#fs.readdir(dir));
   }
 
   /** A branch we cannot read simply contributes no matches. */
@@ -147,6 +117,72 @@ export class Glob {
       return [];
     }
   }
+
+  /**
+   * Match `segments` against an already listed directory.
+   *
+   * Takes the listing as an argument so that `**`, which has to try the rest of
+   * the pattern against the very same directory, does not read it twice.
+   */
+  async #collect(dir: string, segments: Segment[], entries: string[]): Promise<string[]> {
+    const [segment, ...rest] = segments;
+    if (segment === undefined) {
+      return [];
+    }
+
+    const results: string[] = [];
+
+    if (segment instanceof WildcardSegment) {
+      const trailing = rest.length === 0;
+
+      if (trailing) {
+        // `**` last: everything from here down, this directory included
+        results.push(withoutSlash(dir));
+      } else {
+        // `**` matches zero levels, so the rest of the pattern applies here too
+        results.push(...(await this.#collect(dir, rest, entries)));
+      }
+
+      await Promise.all(
+        entries.map(async (entry) => {
+          const file = withSlash(dir) + entry;
+
+          if (await this.#isDirectory(file)) {
+            // ...and one level or more, by descending with the `**` retained
+            results.push(...(await this.#subwalk(file, segments)));
+          } else if (trailing) {
+            results.push(file);
+          }
+        }),
+      );
+
+      return results;
+    }
+
+    // anchored, so a segment pattern has to match the whole entry name
+    const re = new RegExp(`^(?:${segment.toString()})$`);
+
+    await Promise.all(
+      entries.map(async (entry) => {
+        if (!re.test(entry)) {
+          return;
+        }
+
+        const file = withSlash(dir) + entry;
+
+        if (rest.length === 0) {
+          results.push(file);
+          return;
+        }
+
+        if (await this.#isDirectory(file)) {
+          results.push(...(await this.#subwalk(file, rest)));
+        }
+      }),
+    );
+
+    return results;
+  }
 }
 
 function withSlash(s: string): string {
@@ -155,4 +191,15 @@ function withSlash(s: string): string {
   }
 
   return `${s}/`;
+}
+
+/** Drop a trailing separator, but leave a bare root like `/` or `c:/` alone. */
+function withoutSlash(s: string): string {
+  if (s.length <= 1 || (!s.endsWith('/') && !s.endsWith('\\'))) {
+    return s;
+  }
+
+  const trimmed = s.slice(0, -1);
+
+  return trimmed.endsWith(':') ? s : trimmed;
 }

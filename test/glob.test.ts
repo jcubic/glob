@@ -42,12 +42,33 @@ describe('Glob', () => {
       expect(relative(await glob.expand(`${root}/*`))).toEqual(['a.js', 'b.txt', 'other', 'sub']);
     });
 
-    it('expands `**` across directory levels', async () => {
+    it('expands `**` across directory levels, including zero of them', async () => {
+      // bash with globstar lists a.js here too, because `**` may match nothing
       expect(relative(await glob.expand(`${root}/**/*.js`))).toEqual([
+        'a.js',
         'other/e.js',
         'sub/c.js',
         'sub/nested/d.js',
       ]);
+    });
+
+    it('expands a trailing `**` to everything below, the directory included', async () => {
+      expect(relative(await glob.expand(`${root}/**`))).toEqual([
+        '',
+        'a.js',
+        'b.txt',
+        'other',
+        'other/e.js',
+        'sub',
+        'sub/c.js',
+        'sub/nested',
+        'sub/nested/d.js',
+      ]);
+    });
+
+    it('does not let `*` cross a directory separator', async () => {
+      expect(relative(await glob.expand(`${root}/*.js`))).toEqual(['a.js']);
+      expect(await glob.expand(`${root}/*/nested/*.js`)).toEqual([`${root}/sub/nested/d.js`]);
     });
 
     it('expands a literal set', async () => {
@@ -83,6 +104,33 @@ describe('Glob', () => {
       it('resolves to an empty list when it does not', async () => {
         await expect(glob.expand(`${root}/missing.js`)).resolves.toEqual([]);
       });
+    });
+  });
+
+  describe('a relative pattern', () => {
+    it('resolves against the cwd option', async () => {
+      const scoped = new Glob({ fs, cwd: root });
+
+      expect(relative(await scoped.expand('*.js'))).toEqual(['a.js']);
+      expect(relative(await scoped.expand('sub/*.js'))).toEqual(['sub/c.js']);
+    });
+
+    it('supports `**` relative to the cwd', async () => {
+      const scoped = new Glob({ fs, cwd: root });
+
+      expect(relative(await scoped.expand('**/*.js'))).toEqual([
+        'a.js',
+        'other/e.js',
+        'sub/c.js',
+        'sub/nested/d.js',
+      ]);
+    });
+
+    it('defaults the cwd to the process working directory marker', async () => {
+      const scoped = new Glob({ fs });
+
+      // no cwd given, so patterns resolve against '.'
+      expect(await scoped.expand('package.json')).toEqual(['./package.json']);
     });
   });
 

@@ -1,5 +1,6 @@
 import { TokenKind, type WildcardKind } from '../token.js';
 import { SubSegment } from './subsegment.js';
+import { NOT_SEPARATOR } from '../regex.js';
 
 /**
  * A single-segment wildcard: `*` (any run of characters) or `?` (one character).
@@ -24,12 +25,13 @@ export class Wildcard extends SubSegment {
     return true;
   }
 
+  /** Neither wildcard crosses a directory separator — that is what `**` is for. */
   override toString(): string {
     switch (this.type) {
       case TokenKind.Wildcard:
-        return '.*';
+        return `${NOT_SEPARATOR}*`;
       case TokenKind.CharacterWildcard:
-        return '.{1}';
+        return NOT_SEPARATOR;
       default:
         throw new Error('NotImplemented');
     }

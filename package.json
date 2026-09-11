@@ -60,7 +60,8 @@
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
     "check": "npm run format:check && npm run lint && npm run typecheck && npm run test",
-    "prepublishOnly": "npm run build"
+    "publint": "publint",
+    "prepublishOnly": "npm run build && npm run publint"
   },
   "devDependencies": {
     "@types/node": "^24.13.4",

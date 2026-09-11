@@ -9,5 +9,7 @@ export default defineConfig({
   dts: true,
   sourcemap: true,
   clean: true,
-  publint: true,
+  // publint runs as its own script, not from here. tsdown's built-in check
+  // shells out to `npm pack`, which inherits `npm_config_dry_run` from an outer
+  // `npm publish --dry-run` and so writes no tarball for tsdown to find.
 });

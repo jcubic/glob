@@ -83,3 +83,6 @@ jobs:
 
       - name: Build
         run: npm run build
+
+      - name: Check the package is publishable
+        run: npm run publint

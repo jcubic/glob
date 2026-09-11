@@ -1,6 +1,6 @@
-# bash-globe
+# glob
 
-[![CI](https://github.com/jcubic/bash-globe/actions/workflows/test.yml/badge.svg)](https://github.com/jcubic/bash-globe/actions/workflows/test.yml)
+[![CI](https://github.com/jcubic/glob/actions/workflows/test.yml/badge.svg)](https://github.com/jcubic/glob/actions/workflows/test.yml)
 
 Glob implementation in pure TypeScript, with no runtime dependencies.
 
@@ -42,11 +42,11 @@ npm install bash-globe
 The package ships both ESM and CommonJS builds, with TypeScript types for each:
 
 ```js
-import { glob, fnmatch } from 'bash-globe';
+import { glob, fnmatch } from '@jcubic/glob';
 ```
 
 ```js
-const { glob, fnmatch } = require('bash-globe');
+const { glob, fnmatch } = require('@jcubic/glob');
 ```
 
 ## Pattern syntax
@@ -164,4 +164,4 @@ npm run check     # format check, lint, typecheck and test — what CI runs
 Copyright (c) 2026 [Jakub T. Jankiewicz](https://jakub.jankiewicz.org/)<br/>
 Copyright (c) 2013 Kevin Thompson
 
-Released under the MIT License. See [LICENSE](https://github.com/jcubic/bash-globe/blob/master/LICENSE) for details.
+Released under the MIT License. See [LICENSE](https://github.com/jcubic/glob/blob/master/LICENSE) for details.

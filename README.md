@@ -27,7 +27,9 @@ This is also a pure JavaScript implementation.
 
 To load the library:
 
-    var glob = require("glob-js");
+```js
+const glob = require("glob-js");
+```
 
 ## Methods
 
@@ -43,17 +45,19 @@ Search through the filesystem asynchronously.
 
 #### Example
 
-    glob.glob(pattern, flags, function (error, matches) {
-      // if an error occurred, it's in error.
-      // otherwise, "matches" is an array of filenames.
-      ...
-    })
+```js
+glob.glob(pattern, flags, function (error, matches) {
+  // if an error occurred, it's in error.
+  // otherwise, "matches" is an array of filenames.
+  ...
+})
 
-    glob.glob(pattern, function (error, matches) {
-      // if an error occurred, it's in error.
-      // otherwise, "matches" is an array of filenames.
-      ...
-    })
+glob.glob(pattern, function (error, matches) {
+  // if an error occurred, it's in error.
+  // otherwise, "matches" is an array of filenames.
+  ...
+})
+```
 
 ### fnmatch
 
@@ -66,4 +70,13 @@ Test if a string matches a pattern. (no i/o performed)
 
 #### Example
 
-    var isMatch = glob.fnmatch(pattern, str)
+```js
+const isMatch = glob.fnmatch(pattern, str)
+```
+
+## License
+
+Copyright (c) 2026 Jakub T. Jankiewicz<br/>
+Copyright (c) 2013 Kevin Thompson<br/>
+Released under MIT [License](LICENSE)
+

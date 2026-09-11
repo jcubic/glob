@@ -5,6 +5,7 @@ import {
   CharacterSet,
   Identifier,
   LiteralSet,
+  Path,
   Root,
   Segment,
   SubSegment,
@@ -79,6 +80,22 @@ describe('AST', () => {
 
     it('escapes the working directory when compiled to a regex', () => {
       expect(new Root('/home/a.b').toString()).toBe('/home/a\\.b');
+    });
+  });
+
+  describe('Path built by hand', () => {
+    it('falls back to a posix root when it has no items', () => {
+      const path = new Path([]);
+
+      expect(path.text()).toBe('');
+      expect(path.toString()).toBe('^$');
+      expect(path.isWildcard()).toBe(false);
+    });
+
+    it('renders segments supplied without a parser', () => {
+      const path = new Path([new Root(), new Segment([new Identifier('usr')])]);
+
+      expect(path.text()).toBe('/usr');
     });
   });
 

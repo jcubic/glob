@@ -121,6 +121,20 @@ describe('Parser', () => {
     expect(() => parse('/a/{foo,bar')).toThrow(/Unexpected kind detected/);
   });
 
+  it('throws when a token is left over after the path', () => {
+    // `]` and `,` cannot start a sub segment, so the segment ends and the
+    // parser finds itself somewhere other than the end of the text
+    expect(() => parse('/a]')).toThrow(/Expected EOT/);
+    expect(() => parse('/a,b')).toThrow(/Expected EOT/);
+    expect(() => parse('/a}')).toThrow(/Expected EOT/);
+  });
+
+  it('throws on a set that contains no identifier', () => {
+    expect(() => parse('/a/[]')).toThrow(/Unable to parse Identifier/);
+    expect(() => parse('/a/{,b}')).toThrow(/Unable to parse Identifier/);
+    expect(() => parse('/a/{foo,}')).toThrow(/Unable to parse Identifier/);
+  });
+
   describe('Segment', () => {
     it('is not a wildcard when it holds only identifiers', () => {
       expect(new Segment([new Identifier('abc')]).isWildcard()).toBe(false);

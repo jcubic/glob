@@ -132,6 +132,13 @@ describe('Glob', () => {
       // no cwd given, so patterns resolve against '.'
       expect(await scoped.expand('package.json')).toEqual(['./package.json']);
     });
+
+    it('adds no prefix at all when the cwd is empty', async () => {
+      const bare = new Glob({ fs, cwd: '' });
+
+      expect(await bare.expand('package.json')).toEqual(['package.json']);
+      expect((await bare.expand('src/*.ts')).toSorted()).toContain('src/glob.ts');
+    });
   });
 
   describe('constructor', () => {

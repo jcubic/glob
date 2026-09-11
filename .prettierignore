@@ -3,6 +3,3 @@ coverage
 node_modules
 package-lock.json
 .agent-shell
-
-# superseded by src/ — kept until its removal is confirmed
-lib

@@ -10,5 +10,5 @@
     "node": true,
     "es2023": true
   },
-  "ignorePatterns": ["dist", "coverage", "node_modules", "lib"]
+  "ignorePatterns": ["dist", "coverage", "node_modules"]
 }

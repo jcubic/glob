@@ -78,14 +78,17 @@ export class Glob {
       separator = true;
     }
 
+    // normalised once, so every directory the walk sees is free of a trailing
+    // separator and can be reported as a match as-is
+    const from = normalizeDirectory(start);
+
     // nothing to expand — the pattern either names an existing path or matches
     // nothing at all
     if (segments.length === 0) {
-      const literal = start === '' ? '/' : start;
-      return (await this.#exists(literal)) ? [literal] : [];
+      return (await this.#exists(from)) ? [from] : [];
     }
 
-    return this.#walk(start === '' ? '/' : start, segments);
+    return this.#walk(from, segments);
   }
 
   async #exists(path: string): Promise<boolean> {
@@ -106,7 +109,9 @@ export class Glob {
   }
 
   async #walk(dir: string, segments: Segment[]): Promise<string[]> {
-    return this.#collect(dir, segments, await this.#fs.readdir(dir));
+    const [segment, ...rest] = segments as [Segment, ...Segment[]];
+
+    return this.#collect(dir, segment, rest, await this.#fs.readdir(dir));
   }
 
   /** A branch we cannot read simply contributes no matches. */
@@ -124,23 +129,23 @@ export class Glob {
    * Takes the listing as an argument so that `**`, which has to try the rest of
    * the pattern against the very same directory, does not read it twice.
    */
-  async #collect(dir: string, segments: Segment[], entries: string[]): Promise<string[]> {
-    const [segment, ...rest] = segments;
-    if (segment === undefined) {
-      return [];
-    }
-
+  async #collect(
+    dir: string,
+    segment: Segment,
+    rest: Segment[],
+    entries: string[],
+  ): Promise<string[]> {
     const results: string[] = [];
 
     if (segment instanceof WildcardSegment) {
-      const trailing = rest.length === 0;
+      const [next, ...beyond] = rest;
 
-      if (trailing) {
+      if (next === undefined) {
         // `**` last: everything from here down, this directory included
-        results.push(withoutSlash(dir));
+        results.push(dir);
       } else {
         // `**` matches zero levels, so the rest of the pattern applies here too
-        results.push(...(await this.#collect(dir, rest, entries)));
+        results.push(...(await this.#collect(dir, next, beyond, entries)));
       }
 
       await Promise.all(
@@ -149,8 +154,8 @@ export class Glob {
 
           if (await this.#isDirectory(file)) {
             // ...and one level or more, by descending with the `**` retained
-            results.push(...(await this.#subwalk(file, segments)));
-          } else if (trailing) {
+            results.push(...(await this.#subwalk(file, [segment, ...rest])));
+          } else if (next === undefined) {
             results.push(file);
           }
         }),
@@ -193,13 +198,17 @@ function withSlash(s: string): string {
   return `${s}/`;
 }
 
-/** Drop a trailing separator, but leave a bare root like `/` or `c:/` alone. */
-function withoutSlash(s: string): string {
-  if (s.length <= 1 || (!s.endsWith('/') && !s.endsWith('\\'))) {
-    return s;
+/**
+ * The directory a walk starts from.
+ *
+ * A root contributes no separator of its own — POSIX contributes nothing at
+ * all, a drive contributes `c:` — so the bare roots need one putting back
+ * before they name a readable directory.
+ */
+function normalizeDirectory(s: string): string {
+  if (s === '') {
+    return '/';
   }
 
-  const trimmed = s.slice(0, -1);
-
-  return trimmed.endsWith(':') ? s : trimmed;
+  return s.endsWith(':') ? `${s}/` : s;
 }

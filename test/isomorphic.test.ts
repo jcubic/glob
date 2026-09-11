@@ -11,6 +11,9 @@ function fail(code: string, message: string): never {
   throw error;
 }
 
+/** Paths arrive with or without a trailing separator; the store keys on neither. */
+const normalize = (target: string): string => target.replace(/\/+$/, '') || '/';
+
 /**
  * A filesystem in ~25 lines, implementing nothing but `readdir` and `stat`.
  *
@@ -36,8 +39,6 @@ function createMemoryFs(files: string[]): GlobFsPromises {
       }
     });
   }
-
-  const normalize = (target: string): string => target.replace(/\/+$/, '') || '/';
 
   return {
     async readdir(target) {
@@ -109,6 +110,74 @@ describe('platform independence', () => {
 
   it('propagates the filesystem error for a missing directory', async () => {
     await expect(glob.expand('/project/nope/*.js')).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('walks from the filesystem root', async () => {
+    await expect(glob.expand('/*')).resolves.toEqual(['/project']);
+  });
+
+  it('puts the separator back on a windows drive root', async () => {
+    const read: string[] = [];
+    const drive = new Glob({
+      fs: {
+        async readdir(target) {
+          read.push(target);
+          return ['a.js', 'b.txt'];
+        },
+        async stat() {
+          return { isDirectory: () => false };
+        },
+      },
+    });
+
+    await expect(drive.expand('c:/*.js')).resolves.toEqual(['c:/a.js']);
+    // `c:` on its own names the process directory on that drive, not its root
+    expect(read).toEqual(['c:/']);
+  });
+
+  describe('when the filesystem fails part way through', () => {
+    /** Wrap the in-memory filesystem so chosen paths fail like a denied read. */
+    function denying(denied: { readdir?: string[]; stat?: string[] }): GlobFsPromises {
+      return {
+        async readdir(target) {
+          if (denied.readdir?.includes(target)) {
+            fail('EACCES', `permission denied: ${target}`);
+          }
+          return memoryFs.readdir(target);
+        },
+        async stat(target) {
+          if (denied.stat?.includes(target)) {
+            fail('EACCES', `permission denied: ${target}`);
+          }
+          return memoryFs.stat(target);
+        },
+      };
+    }
+
+    it('skips a subdirectory it cannot read instead of failing the search', async () => {
+      const partial = new Glob({ fs: denying({ readdir: ['/project/sub'] }) });
+
+      expect((await partial.expand('/project/**/*.js')).toSorted()).toEqual([
+        '/project/a.js',
+        '/project/my.dir/f.js',
+        '/project/other/e.js',
+      ]);
+    });
+
+    it('treats an entry it cannot stat as not a directory', async () => {
+      const partial = new Glob({ fs: denying({ stat: ['/project/sub'] }) });
+
+      expect((await partial.expand('/project/*/*.js')).toSorted()).toEqual([
+        '/project/my.dir/f.js',
+        '/project/other/e.js',
+      ]);
+    });
+
+    it('still rejects when the directory the search starts from fails', async () => {
+      const partial = new Glob({ fs: denying({ readdir: ['/project'] }) });
+
+      await expect(partial.expand('/project/*.js')).rejects.toMatchObject({ code: 'EACCES' });
+    });
   });
 
   /**

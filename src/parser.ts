@@ -106,7 +106,8 @@ export class Parser {
     return new Wildcard(type);
   }
 
-  private parseSubSegment(): SubSegment {
+  /** Parse the next sub segment, or return undefined once the segment ends. */
+  private parseSubSegment(): SubSegment | undefined {
     switch (this.currentToken.kind) {
       case TokenKind.Identifier:
         return this.parseIdentifier();
@@ -118,7 +119,7 @@ export class Parser {
       case TokenKind.Wildcard:
         return this.parseWildcard(this.currentToken.kind);
       default:
-        throw new SyntaxError('Unable to parse PathSubSegment');
+        return undefined;
     }
   }
 
@@ -129,18 +130,8 @@ export class Parser {
     }
 
     const items: SubSegment[] = [];
-    loop: while (true) {
-      switch (this.currentToken.kind) {
-        case TokenKind.Identifier:
-        case TokenKind.CharacterSetStart:
-        case TokenKind.LiteralSetStart:
-        case TokenKind.CharacterWildcard:
-        case TokenKind.Wildcard:
-          items.push(this.parseSubSegment());
-          continue;
-        default:
-          break loop;
-      }
+    for (let item = this.parseSubSegment(); item !== undefined; item = this.parseSubSegment()) {
+      items.push(item);
     }
 
     return new Segment(items);

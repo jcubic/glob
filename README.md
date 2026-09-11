@@ -1,6 +1,6 @@
-# Isomorphic-glob
-
 <div align="center">
+
+# Isomorphic-glob
 
 [![npm](https://img.shields.io/badge/npm-0.1.0-yellow.svg)](https://www.npmjs.com/package/isomorphic-glob)
 [![github repo](https://img.shields.io/badge/github-repo-orange?logo=github)](https://github.com/jcubic/isomorphic-glob)

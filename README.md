@@ -1,7 +1,14 @@
-# glob
+# Isomorphic-glob
 
+<div align="center">
+
+[![npm](https://img.shields.io/badge/npm-0.1.0-yellow.svg)](https://www.npmjs.com/package/isomorphic-glob)
+[![github repo](https://img.shields.io/badge/github-repo-orange?logo=github)](https://github.com/jcubic/isomorphic-glob)
 [![CI](https://github.com/jcubic/glob/actions/workflows/test.yml/badge.svg)](https://github.com/jcubic/glob/actions/workflows/test.yml)
 [![Coverage Status](https://coveralls.io/repos/github/jcubic/glob/badge.svg?branch=master)](https://coveralls.io/github/jcubic/glob?branch=master)
+[![LICENSE MIT](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/jcubic/isomorphic-glob/blob/master/LICENSE)
+
+</div>
 
 Isomorphic glob implementation in pure TypeScript, with no runtime dependencies.
 

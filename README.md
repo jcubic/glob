@@ -1,6 +1,7 @@
 # glob
 
 [![CI](https://github.com/jcubic/glob/actions/workflows/test.yml/badge.svg)](https://github.com/jcubic/glob/actions/workflows/test.yml)
+[![Coverage Status](https://coveralls.io/repos/github/jcubic/glob/badge.svg?branch=master)](https://coveralls.io/github/jcubic/glob?branch=master)
 
 Glob implementation in pure TypeScript, with no runtime dependencies.
 
@@ -34,7 +35,7 @@ This is also a pure JavaScript implementation.
 ## Installation
 
 ```bash
-npm install bash-globe
+npm install @jcubic/glob
 ```
 
 ## Usage
@@ -119,7 +120,7 @@ The scanner, parser and AST are exported as well, for callers that want the pars
 than the matches:
 
 ```js
-import { Parser, Scanner, Token, TokenKind, Ast } from 'bash-globe';
+import { Parser, Scanner, Token, TokenKind, Ast } from '@jcubic/glob';
 
 const path = new Parser('/hello/**/you?/*.rb').parse();
 
@@ -146,10 +147,14 @@ These behaviours are inherited from the original implementation and are pinned b
 npm install       # install the toolchain
 npm test          # run the vitest suite
 npm run test:watch
-npm run test:coverage
+npm run test:coverage  # writes coverage/lcov.info, the report CI sends to Coveralls
 npm run build     # bundle ESM + CJS + types with tsdown
 npm run check     # format check, lint, typecheck and test — what CI runs
 ```
+
+CI runs the suite on every Node version in the matrix and uploads each run's `lcov.info` to
+[Coveralls](https://coveralls.io/github/jcubic/glob) as a parallel build, which a final job closes
+so the reports are merged into one result.
 
 | Tool       | Purpose                    |
 | ---------- | -------------------------- |

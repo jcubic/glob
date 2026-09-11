@@ -16,25 +16,47 @@ concurrency:
 
 jobs:
   test:
-    name: Test on Node ${{ matrix.node-version }}
+    name: Test on Node ${{ matrix.node }}
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        node-version: ['22.x', '24.x']
+        node: ['22', '24']
 
     steps:
       - uses: actions/checkout@v7
 
       - uses: actions/setup-node@v7
         with:
-          node-version: ${{ matrix.node-version }}
+          node-version: ${{ matrix.node }}
           cache: npm
 
       - run: npm ci
 
-      - name: Run tests
-        run: npm test
+      - name: Run tests with coverage
+        run: npm run test:coverage
+
+      - name: Upload coverage to Coveralls
+        uses: coverallsapp/github-action@v2
+        with:
+          file: coverage/lcov.info
+          flag-name: node-${{ matrix.node }}
+          parallel: true
+
+  coverage:
+    name: Publish coverage
+    needs: test
+    # run even when a matrix leg failed, so Coveralls never waits on a build
+    # that will not report
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Close the parallel Coveralls build
+        uses: coverallsapp/github-action@v2
+        with:
+          parallel-finished: true
+          carryforward: node-22,node-24
 
   check:
     name: Lint, types and build
@@ -45,7 +67,7 @@ jobs:
 
       - uses: actions/setup-node@v7
         with:
-          node-version: '24.x'
+          node-version: '24'
           cache: npm
 
       - run: npm ci

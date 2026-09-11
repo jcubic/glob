@@ -11,11 +11,11 @@
     "bash",
     "regex"
   ],
-  "homepage": "https://github.com/jcubic/bash-globe#readme",
-  "bugs": "https://github.com/jcubic/bash-globe/issues",
+  "homepage": "https://github.com/jcubic/glob#readme",
+  "bugs": "https://github.com/jcubic/glob/issues",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/jcubic/bash-globe.git"
+    "url": "git+https://github.com/jcubic/glob.git"
   },
   "license": "MIT",
   "author": "Jakub T. Jankiewicz <jcubic@jcubic.pl> (https://jakub.jankiewicz.org/)",
@@ -43,6 +43,9 @@
   "files": [
     "dist"
   ],
+  "publishConfig": {
+    "access": "public"
+  },
   "engines": {
     "node": ">=20.19.0"
   },

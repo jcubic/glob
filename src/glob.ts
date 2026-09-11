@@ -1,58 +1,152 @@
-import fs from 'node:fs';
 import { Parser } from './parser.js';
-import { Segment, WildcardSegment } from './ast/index.js';
-
-/** Error passed to a {@link GlobCallback} when the search fails. */
-export type GlobError = NodeJS.ErrnoException;
+import { Root, Segment, WildcardSegment } from './ast/index.js';
+import { toPromises, type GlobFs, type GlobFsPromises } from './fs.js';
 
 /**
- * Node-style callback receiving the matched paths.
+ * Options accepted by the {@link Glob} constructor.
  */
-export type GlobCallback = (error: GlobError | null, matches?: string[]) => void;
-
-/**
- * Search the filesystem asynchronously for paths matching `pattern`.
- *
- * @param pattern glob pattern to expand
- * @param flags currently unused; accepted so this is a drop-in replacement
- * @param cb called with the matched paths
- */
-export function glob(pattern: string, cb: GlobCallback): void;
-export function glob(pattern: string, flags: unknown, cb: GlobCallback): void;
-export function glob(pattern: string, flags: unknown | GlobCallback, cb?: GlobCallback): void {
-  const done = typeof flags === 'function' && !cb ? (flags as GlobCallback) : cb;
-
-  if (typeof done !== 'function') {
-    throw new TypeError('glob: a callback function is required');
-  }
-
-  const parser = new Parser(pattern);
-  const path = parser.parse();
-  const segments = [...path.items];
-  const calm: string[] = [];
-
-  // consume the leading non-wildcard segments; they are the directory to walk from
-  while (segments.length > 0) {
-    const segment = segments.shift() as Segment;
-    if (segment.isWildcard()) {
-      segments.unshift(segment);
-      break;
-    }
-    calm.push(segment.toString());
-  }
-
-  walk(withSlash(calm.join('/')), segments, done);
+export interface GlobOptions {
+  /**
+   * The filesystem to search. Required — the library ships no default, which is
+   * what keeps it free of any platform specific import.
+   */
+  fs: GlobFs;
+  /**
+   * Directory that relative patterns resolve against.
+   *
+   * Relative patterns are not supported yet (see the README), so this is
+   * currently only recorded on the parsed root.
+   */
+  cwd?: string | undefined;
 }
 
 /**
- * Test whether `str` matches `pattern`. Performs no filesystem access.
+ * Expands glob patterns against an injected filesystem.
+ *
+ * ```js
+ * const glob = new Glob({ fs });
+ * const matches = await glob.expand('/usr/lib/*.so');
+ * ```
  */
-export function fnmatch(pattern: string, str: string): boolean {
-  const parser = new Parser(pattern);
-  const path = parser.parse();
-  const re = new RegExp(path.toString());
+export class Glob {
+  readonly #fs: GlobFsPromises;
+  readonly #cwd: string | undefined;
 
-  return re.test(str);
+  constructor(options: GlobOptions) {
+    if (!options?.fs) {
+      throw new TypeError('Glob: the `fs` option is required');
+    }
+
+    this.#fs = toPromises(options.fs);
+    this.#cwd = options.cwd;
+  }
+
+  /**
+   * Find every path matching `pattern`.
+   *
+   * Rejects if the first directory the search starts from cannot be read.
+   * Directories that fail to be read *during* the walk contribute no matches
+   * rather than failing the whole search. The order of the result is not
+   * specified.
+   */
+  async expand(pattern: string): Promise<string[]> {
+    const path = new Parser(pattern, { cwd: this.#cwd }).parse();
+    const segments = [...path.items];
+    const literal: string[] = [];
+
+    // the leading literal segments are not searched, they are where we start.
+    // they are taken as source text, not as the compiled regex, so that a
+    // directory like `my.dir` is not turned into `my\.dir`
+    while (segments.length > 0) {
+      const segment = segments.shift() as Segment;
+      if (segment.isWildcard()) {
+        segments.unshift(segment);
+        break;
+      }
+      literal.push(segment instanceof Root ? segment.toString() : segment.text());
+    }
+
+    const root = literal.join('/');
+
+    // nothing to expand — the pattern either names an existing path or matches
+    // nothing at all
+    if (segments.length === 0) {
+      return (await this.#exists(root)) ? [root] : [];
+    }
+
+    return this.#walk(withSlash(root), segments);
+  }
+
+  async #exists(path: string): Promise<boolean> {
+    try {
+      await this.#fs.stat(path);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  async #walk(dir: string, segments: Segment[]): Promise<string[]> {
+    const list = await this.#fs.readdir(dir);
+
+    const rest = [...segments];
+    const segment = rest.shift() as Segment;
+    const re = new RegExp(segment.toString());
+
+    // `**` can span several levels, so put it back and deal with it per entry
+    const directoryWildcard = segment instanceof WildcardSegment;
+    if (directoryWildcard) {
+      rest.unshift(segment);
+    }
+
+    const results: string[] = [];
+
+    await Promise.all(
+      list.map(async (entry) => {
+        const matched = re.test(entry);
+        const file = withSlash(dir) + entry;
+
+        if (await this.#isDirectory(file)) {
+          let min = 0;
+
+          if (directoryWildcard) {
+            // recurse keeping the `**`, so it can consume another level
+            results.push(...(await this.#subwalk(file, rest.slice(0))));
+            min++;
+          }
+
+          // ...and recurse without it
+          if (rest.length > min && (min === 1 || matched)) {
+            results.push(...(await this.#subwalk(file, rest.slice(min))));
+            return;
+          }
+        }
+
+        if (matched && rest.length === 0) {
+          results.push(file);
+        }
+      }),
+    );
+
+    return results;
+  }
+
+  async #isDirectory(path: string): Promise<boolean> {
+    try {
+      return (await this.#fs.stat(path)).isDirectory();
+    } catch {
+      return false;
+    }
+  }
+
+  /** A branch we cannot read simply contributes no matches. */
+  async #subwalk(dir: string, segments: Segment[]): Promise<string[]> {
+    try {
+      return await this.#walk(dir, segments);
+    } catch {
+      return [];
+    }
+  }
 }
 
 function withSlash(s: string): string {
@@ -61,77 +155,4 @@ function withSlash(s: string): string {
   }
 
   return `${s}/`;
-}
-
-function walk(dir: string, segments: Segment[], done: GlobCallback): void {
-  let results: string[] = [];
-
-  fs.readdir(dir, (err, list) => {
-    if (err) {
-      done(err);
-      return;
-    }
-
-    const segment = segments.shift() as Segment;
-    const re = new RegExp(segment.toString());
-    let dw = false;
-
-    if (segment instanceof WildcardSegment) {
-      // `**` can span several levels, so put it back and deal with it per entry
-      segments.unshift(segment);
-      dw = true;
-    }
-
-    let pending = list.length;
-    if (pending === 0) {
-      done(null, list);
-      return;
-    }
-
-    const tryComplete = (): void => {
-      if (!--pending) {
-        done(null, results);
-      }
-    };
-
-    const subwalk = (f: string, sgmnts: Segment[]): void => {
-      walk(f, sgmnts, (subErr, res) => {
-        if (subErr) {
-          console.log(`ERROR in subwalk:${f}`);
-        }
-
-        results = results.concat(res ?? []);
-        tryComplete();
-      });
-    };
-
-    list.forEach((entry) => {
-      const pathTest = re.test(entry);
-      const file = withSlash(dir) + entry;
-
-      fs.stat(file, (_statErr, stat) => {
-        if (stat?.isDirectory()) {
-          let min = 0;
-          if (dw) {
-            // a directory wildcard is in play, so also recurse keeping the `**`
-            pending++;
-            subwalk(file, segments.slice(0));
-            min++;
-          }
-
-          // ...and recurse without it
-          if (segments.length > min && (min === 1 || pathTest)) {
-            subwalk(file, segments.slice(min));
-            return;
-          }
-        }
-
-        if (pathTest && segments.length === 0) {
-          results.push(file);
-        }
-
-        tryComplete();
-      });
-    });
-  });
 }

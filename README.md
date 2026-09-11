@@ -3,7 +3,7 @@
 [![CI](https://github.com/jcubic/glob/actions/workflows/test.yml/badge.svg)](https://github.com/jcubic/glob/actions/workflows/test.yml)
 [![Coverage Status](https://coveralls.io/repos/github/jcubic/glob/badge.svg?branch=master)](https://coveralls.io/github/jcubic/glob?branch=master)
 
-Glob implementation in pure TypeScript, with no runtime dependencies.
+Isomorphic glob implementation in pure TypeScript, with no runtime dependencies.
 
 ## What is a glob?
 
@@ -12,42 +12,136 @@ glob.
 
 See: http://en.wikipedia.org/wiki/Glob_(programming) for more info.
 
-## Supported environments
+## Isomorphic and platform independent
 
-The library is written against `node:fs` only, so it runs anywhere Node does:
+The library imports nothing platform specific — no `node:fs`, no `node:path`, no `process`. The
+filesystem is a constructor argument, so the same build runs unchanged in Node.js, in the browser,
+in Deno, in Bun, in a service worker or in an edge runtime.
 
-- Windows
-- Macintosh OS X (Darwin)
-- FreeBSD
-- NetBSD
-- Linux
-- Solaris
+That means there is no default filesystem: you always pass one in. In return, you are never limited
+to the real one — an in-memory tree, a zip archive, a remote API or a git checkout all work equally
+well as long as they meet the small interface below.
 
-Requires Node.js 20.19 or newer.
+`match()` needs no filesystem at all and is pure string work, so it runs anywhere with no setup.
 
 ## Why another glob library?
 
 From all of my searching I have not been able to find a glob utility that works on Windows and
-\*nix. If you need something that works on all platforms... This is what you need.
+\*nix. If you need something that works on all platforms... This is what you need. Windows, macOS,
+FreeBSD, NetBSD, Linux and Solaris are all handled by the same code, because paths are parsed rather
+than delegated to a platform API — `/` and `\` are both accepted as separators everywhere, and
+`c:/` is understood as a drive root.
 
-This is also a pure JavaScript implementation.
+## The `fs` interface
+
+This is the whole contract. Two promise-returning methods, one of which is only ever asked whether
+an entry is a directory:
+
+```ts
+interface GlobStats {
+  isDirectory(): boolean;
+}
+
+interface GlobFsPromises {
+  readdir(path: string): Promise<string[]>; // entry names, not full paths
+  stat(path: string): Promise<GlobStats>;
+}
+```
+
+`Glob` accepts either an object with those two methods, or a module that nests them under
+`promises` — which is the shape `node:fs`, ZenFS and LightningFS all already have:
+
+```ts
+interface GlobFsModule {
+  promises: GlobFsPromises;
+}
+
+type GlobFs = GlobFsModule | GlobFsPromises;
+```
+
+So both of these are valid:
+
+```js
+new Glob({ fs }); //          a module, using fs.promises
+new Glob({ fs: fs.promises }); // the promise API on its own
+```
+
+`readdir` is expected to reject for a path that is not a readable directory, and `stat` to reject
+for a path that does not exist. Nothing else is called — no `readFile`, no `open`, no watchers.
 
 ## Installation
 
 ```bash
-npm install @jcubic/glob
+npm install isomorphic-glob
 ```
 
 ## Usage
 
-The package ships both ESM and CommonJS builds, with TypeScript types for each:
+The package ships both ESM and CommonJS builds, with TypeScript types for each.
 
 ```js
-import { glob, fnmatch } from '@jcubic/glob';
+import { Glob, match } from 'isomorphic-glob';
+import fs from 'node:fs';
+
+const glob = new Glob({ fs });
+
+const files = await glob.expand('/usr/lib/*.so');
+
+const isMatch = match('/usr/lib/*.so', '/usr/lib/libc.so');
 ```
 
 ```js
-const { glob, fnmatch } = require('@jcubic/glob');
+const { Glob, match } = require('isomorphic-glob');
+```
+
+### In the browser
+
+Any browser filesystem works. With [ZenFS](https://github.com/zen-fs/core):
+
+```js
+import { configureSingle, fs } from '@zenfs/core';
+import { IndexedDB } from '@zenfs/dom';
+import { Glob } from 'isomorphic-glob';
+
+await configureSingle({ backend: IndexedDB });
+
+const glob = new Glob({ fs });
+const files = await glob.expand('/project/**/*.js');
+```
+
+With [LightningFS](https://github.com/isomorphic-git/lightning-fs):
+
+```js
+import FS from '@isomorphic-git/lightning-fs';
+import { Glob } from 'isomorphic-glob';
+
+const fs = new FS('my-project');
+
+const glob = new Glob({ fs });
+const files = await glob.expand('/project/**/*.js');
+```
+
+Or with no library at all — anything implementing the two methods will do:
+
+```js
+const glob = new Glob({
+  fs: {
+    async readdir(path) {
+      /* ... */
+    },
+    async stat(path) {
+      /* ... */
+    },
+  },
+});
+```
+
+Some filesystems type `readdir` more broadly than this library does — [memfs](https://github.com/streamich/memfs),
+for instance, returns `Dirent[] | string[]`. Those work at runtime but need a cast to satisfy
+TypeScript:
+
+```ts
+new Glob({ fs: memfs as unknown as GlobFs });
 ```
 
 ## Pattern syntax
@@ -66,52 +160,38 @@ Patterns must be absolute — either POSIX (`/usr/lib/*.so`) or a Windows drive 
 
 ## API
 
-### glob
+### new Glob(options)
 
-Search through the filesystem asynchronously.
+| Option | Type     | Description                                                   |
+| ------ | -------- | ------------------------------------------------------------- |
+| `fs`   | `GlobFs` | **Required.** The filesystem to search.                       |
+| `cwd`  | `string` | Directory relative patterns anchor to. See Known limitations. |
 
-#### Params
+Throws a `TypeError` if `fs` is missing or does not provide `readdir` and `stat`.
 
-- `pattern`: `string`
-- `flags`: Optional — currently unused, but accepted so this works as a drop-in replacement
-- `cb`: `(error: Error | null, matches?: string[]) => void`
+### glob.expand(pattern)
 
-#### Example
+Find every path matching `pattern`. Returns `Promise<string[]>`.
 
 ```js
-glob(pattern, flags, function (error, matches) {
-  // if an error occurred, it's in error.
-  // otherwise, "matches" is an array of filenames.
-});
-
-glob(pattern, function (error, matches) {
-  // if an error occurred, it's in error.
-  // otherwise, "matches" is an array of filenames.
-});
+const files = await glob.expand('/project/**/*.js');
 ```
 
-Promises are not built in, but the callback is Node-style, so `util.promisify` works:
+- Rejects with the underlying filesystem error if the directory the search starts from cannot be
+  read.
+- A directory that cannot be read _during_ the walk contributes no matches instead of failing the
+  whole search.
+- A pattern containing no wildcard resolves to `[pattern]` if that path exists, or `[]` if it does
+  not.
+- The order of the result is not specified. Sort it if you need a stable order.
+
+### match(pattern, str)
+
+Test whether `str` matches `pattern`. Returns `boolean`. No filesystem is touched, so this needs no
+`Glob` instance and runs in any environment.
 
 ```js
-import { promisify } from 'node:util';
-
-const globAsync = promisify(glob);
-const matches = await globAsync('/usr/lib/*.so');
-```
-
-### fnmatch
-
-Test if a string matches a pattern. No I/O is performed.
-
-#### Params
-
-- `pattern`: `string`
-- `str`: `string` to test
-
-#### Example
-
-```js
-const isMatch = fnmatch(pattern, str);
+const isMatch = match('/dev/sd[abcd]1', '/dev/sdb1');
 ```
 
 ### Parser internals
@@ -120,7 +200,7 @@ The scanner, parser and AST are exported as well, for callers that want the pars
 than the matches:
 
 ```js
-import { Parser, Scanner, Token, TokenKind, Ast } from '@jcubic/glob';
+import { Parser, Scanner, Token, TokenKind, Ast } from 'isomorphic-glob';
 
 const path = new Parser('/hello/**/you?/*.rb').parse();
 
@@ -134,12 +214,13 @@ path.items[3] instanceof Ast.WildcardSegment; //=> true
 These behaviours are inherited from the original implementation and are pinned by
 `test/known-issues.test.ts`:
 
-- the generated regular expression is not anchored, so `fnmatch('/tmp/*.js', '/tmp/foo.jsx')` is
+- the generated regular expression is not anchored, so `match('/tmp/*.js', '/tmp/foo.jsx')` is
   `true`
 - `*` compiles to `.*` and therefore crosses `/`
 - only the first `.` of an identifier is escaped, so `b.c.d` compiles to `b\.c.d`
 - a leading `**` always consumes at least one directory level, unlike bash's `globstar`
-- relative patterns are not supported and throw `Expected EOT`
+- relative patterns are not supported and throw `Expected EOT`, so the `cwd` option has no effect
+  yet
 
 ## Development
 
@@ -164,9 +245,14 @@ so the reports are merged into one result.
 | oxlint     | linting                    |
 | Prettier   | formatting                 |
 
+`test/isomorphic.test.ts` runs the suite against a hand written in-memory filesystem and asserts
+that no file under `src/` imports a platform specific module, so the isomorphic guarantee is
+enforced rather than just documented.
+
 ## License
 
 Copyright (c) 2026 [Jakub T. Jankiewicz](https://jakub.jankiewicz.org/)<br/>
 Copyright (c) 2013 Kevin Thompson
 
-Released under the MIT License. See [LICENSE](https://github.com/jcubic/glob/blob/master/LICENSE) for details.
+Released under the MIT License. See [LICENSE](https://github.com/jcubic/glob/blob/master/LICENSE)
+for details.

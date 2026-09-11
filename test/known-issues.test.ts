@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { fnmatch } from '../src/glob.js';
+import { match } from '../src/match.js';
 import { Parser } from '../src/parser.js';
 
 /**
@@ -10,23 +10,23 @@ import { Parser } from '../src/parser.js';
 describe('known issues', () => {
   it.fails('should anchor the generated regex', () => {
     // `/tmp/.*\.js` is used unanchored, so any string *containing* a match passes
-    expect(fnmatch('/tmp/*.js', '/tmp/foo.jsx')).toBe(false);
-    expect(fnmatch('/tmp/*.js', 'xxx/tmp/foo.js')).toBe(false);
+    expect(match('/tmp/*.js', '/tmp/foo.jsx')).toBe(false);
+    expect(match('/tmp/*.js', 'xxx/tmp/foo.js')).toBe(false);
   });
 
   it.fails('should stop `*` at a directory separator', () => {
     // `*` compiles to `.*`, which happily crosses `/`
-    expect(fnmatch('/tmp/*.js', '/tmp/a/foo.js')).toBe(false);
+    expect(match('/tmp/*.js', '/tmp/a/foo.js')).toBe(false);
   });
 
   it.fails('should escape every dot in an identifier, not just the first', () => {
     // Identifier#toString uses a non-global replace, so `b.c.d` becomes `b\.c.d`
-    expect(fnmatch('/a/b.c.d', '/a/b.cXd')).toBe(false);
+    expect(match('/a/b.c.d', '/a/b.cXd')).toBe(false);
   });
 
   it.fails('should match zero directories for a leading `**`', () => {
     // bash's globstar matches `/a/b.js`; here `**` always consumes a level
-    expect(fnmatch('/a/**/b.js', '/a/b.js')).toBe(true);
+    expect(match('/a/**/b.js', '/a/b.js')).toBe(true);
   });
 
   it.fails('should support patterns relative to the working directory', () => {

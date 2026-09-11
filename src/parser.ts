@@ -13,16 +13,29 @@ import {
 } from './ast/index.js';
 
 /**
+ * Options accepted by the {@link Parser} constructor.
+ */
+export interface ParserOptions {
+  /**
+   * Directory a relative pattern is anchored to. Supplied by the caller rather
+   * than read from `process.cwd()`, so the parser stays platform independent.
+   */
+  cwd?: string | undefined;
+}
+
+/**
  * Recursive-descent parser that turns a glob pattern into a {@link Path} AST.
  */
 export class Parser {
   private scanner: Scanner | undefined;
   private currentToken: Token = new Token(TokenKind.EOT, '');
+  private readonly cwd: string | undefined;
 
-  constructor(pattern?: string) {
+  constructor(pattern?: string, options?: ParserOptions) {
     if (pattern) {
       this.scanner = new Scanner(pattern);
     }
+    this.cwd = options?.cwd;
   }
 
   /**
@@ -149,7 +162,10 @@ export class Parser {
       return new Root(ident);
     }
 
-    return new Root(process.cwd());
+    // a relative pattern: anchored to the caller supplied cwd. parse() rejects
+    // these today, because parsePath() only accepts segments introduced by a
+    // separator — see "Known limitations" in the README.
+    return new Root(this.cwd);
   }
 
   private parsePath(): Path {

@@ -22,5 +22,14 @@ jobs:
       - name: Update npm
         run: npm install -g npm@latest
 
+      - name: install dependencies
+        run: npm ci
+
+      - name: Build
+        run: npm run build
+
+      - name: Test
+        run: npm run test
+
       - name: Publish
         run: npm publish

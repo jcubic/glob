@@ -54,16 +54,19 @@ export class Glob {
     const path = new Parser(pattern, { cwd: this.#cwd }).parse();
     const segments = [...path.items];
 
-    // the walk works in whole paths, so a relative pattern has its base taken
-    // back off the results at the end
-    const root = segments[0];
-    const base = root instanceof Root && root.isRelative ? root.text() : '';
-
     // the leading literal segments are not searched, they are where the walk
     // starts. they are taken as source text, not as the compiled regex, so that
     // a directory like `my.dir` is not turned into `my\.dir`
+    //
+    // two paths are built at once: `start`, which the filesystem is asked
+    // about, and `name`, the same place as the caller will see it. they differ
+    // by the cwd a relative pattern was anchored to, which is the caller's
+    // base and so no part of the answer
     let start = '';
+    let name = '';
     let separator = false;
+    let named = false;
+    let relative = false;
 
     while (segments.length > 0) {
       const segment = segments[0] as Segment;
@@ -77,6 +80,11 @@ export class Glob {
         // a POSIX root is empty but still introduces a separator; a relative
         // pattern with no base does not
         separator = !(segment.isRelative && start === '');
+        relative = segment.isRelative;
+        // an absolute pattern is reported as written, so there the two paths
+        // are one and the same
+        name = relative ? '' : start;
+        named = !relative;
         continue;
       }
 
@@ -85,19 +93,27 @@ export class Glob {
       }
       start += segment.text();
       separator = true;
+
+      if (named) {
+        name += '/';
+      }
+      name += segment.text();
+      named = true;
     }
 
     // normalised once, so every directory the walk sees is free of a trailing
     // separator and can be reported as a match as-is
     const from = normalizeDirectory(start);
+    // an empty name is the cwd itself, which stands for no prefix at all
+    const shown = relative ? name : from;
 
     // nothing to expand — the pattern either names an existing path or matches
     // nothing at all
     if (segments.length === 0) {
-      return (await this.#exists(from)) ? relativize([from], base) : [];
+      return (await this.#exists(from)) ? [shown] : [];
     }
 
-    return relativize(await this.#walk(from, segments), base);
+    return this.#walk(from, shown, segments);
   }
 
   async #exists(path: string): Promise<boolean> {
@@ -117,16 +133,21 @@ export class Glob {
     }
   }
 
-  async #walk(dir: string, segments: Segment[]): Promise<string[]> {
+  /**
+   * Walk `dir`, reporting whatever matches under the name `as` — the same
+   * directory as the caller asked for it, which for a relative pattern is the
+   * empty string for the cwd itself.
+   */
+  async #walk(dir: string, as: string, segments: Segment[]): Promise<string[]> {
     const [segment, ...rest] = segments as [Segment, ...Segment[]];
 
-    return this.#collect(dir, segment, rest, await this.#fs.readdir(dir));
+    return this.#collect(dir, as, segment, rest, await this.#fs.readdir(dir));
   }
 
   /** A branch we cannot read simply contributes no matches. */
-  async #subwalk(dir: string, segments: Segment[]): Promise<string[]> {
+  async #subwalk(dir: string, as: string, segments: Segment[]): Promise<string[]> {
     try {
-      return await this.#walk(dir, segments);
+      return await this.#walk(dir, as, segments);
     } catch {
       return [];
     }
@@ -140,6 +161,7 @@ export class Glob {
    */
   async #collect(
     dir: string,
+    as: string,
     segment: Segment,
     rest: Segment[],
     entries: string[],
@@ -150,11 +172,14 @@ export class Glob {
       const [next, ...beyond] = rest;
 
       if (next === undefined) {
-        // `**` last: everything from here down, this directory included
-        results.push(dir);
+        // `**` last: everything from here down, this directory included —
+        // except the cwd itself, which bash does not list as `.` either
+        if (as !== '') {
+          results.push(as);
+        }
       } else {
         // `**` matches zero levels, so the rest of the pattern applies here too
-        results.push(...(await this.#collect(dir, next, beyond, entries)));
+        results.push(...(await this.#collect(dir, as, next, beyond, entries)));
       }
 
       await Promise.all(
@@ -163,9 +188,9 @@ export class Glob {
 
           if (await this.#isDirectory(file)) {
             // ...and one level or more, by descending with the `**` retained
-            results.push(...(await this.#subwalk(file, [segment, ...rest])));
+            results.push(...(await this.#subwalk(file, join(as, entry), [segment, ...rest])));
           } else if (next === undefined) {
-            results.push(file);
+            results.push(join(as, entry));
           }
         }),
       );
@@ -181,10 +206,10 @@ export class Glob {
       const file = withSlash(dir) + text;
 
       if (rest.length === 0) {
-        return [file];
+        return [join(as, text)];
       }
 
-      return this.#subwalk(file, rest);
+      return this.#subwalk(file, join(as, text), rest);
     }
 
     // anchored, so a segment pattern has to match the whole entry name
@@ -199,12 +224,12 @@ export class Glob {
         const file = withSlash(dir) + entry;
 
         if (rest.length === 0) {
-          results.push(file);
+          results.push(join(as, entry));
           return;
         }
 
         if (await this.#isDirectory(file)) {
-          results.push(...(await this.#subwalk(file, rest)));
+          results.push(...(await this.#subwalk(file, join(as, entry), rest)));
         }
       }),
     );
@@ -214,59 +239,11 @@ export class Glob {
 }
 
 /**
- * Report matches the way the pattern was written: a relative pattern was
- * anchored to `base` before the walk, so `base` comes back off here.
- *
- * The base matching a result exactly is the start directory itself, which a
- * trailing `**` reports — bash does not list `.` for it, so neither do we.
+ * Name an entry of `dir`, where an empty `dir` is the cwd of a relative
+ * pattern and contributes no prefix of its own.
  */
-function relativize(matches: string[], base: string): string[] {
-  if (base === '') {
-    return matches;
-  }
-
-  const results: string[] = [];
-
-  for (const match of matches) {
-    const rest = withoutBase(match, base);
-    if (rest !== '') {
-      results.push(rest);
-    }
-  }
-
-  return results;
-}
-
-function withoutBase(match: string, base: string): string {
-  // a base written with a trailing separator ('/project/') anchored the walk
-  // just as well, so the separators between the two are skipped rather than
-  // counted
-  let end = base.length;
-  while (end > 0 && isSeparator(base[end - 1] as string)) {
-    end -= 1;
-  }
-
-  const prefix = base.slice(0, end);
-  if (!match.startsWith(prefix)) {
-    return match;
-  }
-
-  let start = prefix.length;
-  while (start < match.length && isSeparator(match[start] as string)) {
-    start += 1;
-  }
-
-  // the base has to end on a separator, or it is a different name that merely
-  // begins the same way — '/proj' against '/project/a.js'
-  if (start === prefix.length && start !== match.length) {
-    return match;
-  }
-
-  return match.slice(start);
-}
-
-function isSeparator(c: string): boolean {
-  return c === '/' || c === '\\';
+function join(dir: string, entry: string): string {
+  return dir === '' ? entry : withSlash(dir) + entry;
 }
 
 function withSlash(s: string): string {

@@ -41,6 +41,10 @@ export class Glob {
   /**
    * Find every path matching `pattern`.
    *
+   * An absolute pattern yields absolute paths. A relative one yields paths
+   * relative to `cwd`, the way a shell reports them — the base the pattern was
+   * anchored to is not part of the answer.
+   *
    * Rejects if the first directory the search starts from cannot be read.
    * Directories that fail to be read *during* the walk contribute no matches
    * rather than failing the whole search. The order of the result is not
@@ -49,6 +53,11 @@ export class Glob {
   async expand(pattern: string): Promise<string[]> {
     const path = new Parser(pattern, { cwd: this.#cwd }).parse();
     const segments = [...path.items];
+
+    // the walk works in whole paths, so a relative pattern has its base taken
+    // back off the results at the end
+    const root = segments[0];
+    const base = root instanceof Root && root.isRelative ? root.text() : '';
 
     // the leading literal segments are not searched, they are where the walk
     // starts. they are taken as source text, not as the compiled regex, so that
@@ -85,10 +94,10 @@ export class Glob {
     // nothing to expand — the pattern either names an existing path or matches
     // nothing at all
     if (segments.length === 0) {
-      return (await this.#exists(from)) ? [from] : [];
+      return (await this.#exists(from)) ? relativize([from], base) : [];
     }
 
-    return this.#walk(from, segments);
+    return relativize(await this.#walk(from, segments), base);
   }
 
   async #exists(path: string): Promise<boolean> {
@@ -164,6 +173,20 @@ export class Glob {
       return results;
     }
 
+    // `.` and `..` name a directory that no listing reports, so they are a
+    // move rather than something to match an entry against. only the literal
+    // text counts: bash does not expand `[.]` or `{.,x}` onto them either
+    const text = segment.text();
+    if (text === '.' || text === '..') {
+      const file = withSlash(dir) + text;
+
+      if (rest.length === 0) {
+        return [file];
+      }
+
+      return this.#subwalk(file, rest);
+    }
+
     // anchored, so a segment pattern has to match the whole entry name
     const re = new RegExp(`^(?:${segment.toString()})$`);
 
@@ -188,6 +211,62 @@ export class Glob {
 
     return results;
   }
+}
+
+/**
+ * Report matches the way the pattern was written: a relative pattern was
+ * anchored to `base` before the walk, so `base` comes back off here.
+ *
+ * The base matching a result exactly is the start directory itself, which a
+ * trailing `**` reports — bash does not list `.` for it, so neither do we.
+ */
+function relativize(matches: string[], base: string): string[] {
+  if (base === '') {
+    return matches;
+  }
+
+  const results: string[] = [];
+
+  for (const match of matches) {
+    const rest = withoutBase(match, base);
+    if (rest !== '') {
+      results.push(rest);
+    }
+  }
+
+  return results;
+}
+
+function withoutBase(match: string, base: string): string {
+  // a base written with a trailing separator ('/project/') anchored the walk
+  // just as well, so the separators between the two are skipped rather than
+  // counted
+  let end = base.length;
+  while (end > 0 && isSeparator(base[end - 1] as string)) {
+    end -= 1;
+  }
+
+  const prefix = base.slice(0, end);
+  if (!match.startsWith(prefix)) {
+    return match;
+  }
+
+  let start = prefix.length;
+  while (start < match.length && isSeparator(match[start] as string)) {
+    start += 1;
+  }
+
+  // the base has to end on a separator, or it is a different name that merely
+  // begins the same way — '/proj' against '/project/a.js'
+  if (start === prefix.length && start !== match.length) {
+    return match;
+  }
+
+  return match.slice(start);
+}
+
+function isSeparator(c: string): boolean {
+  return c === '/' || c === '\\';
 }
 
 function withSlash(s: string): string {

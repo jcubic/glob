@@ -108,17 +108,30 @@ describe('Glob', () => {
   });
 
   describe('a relative pattern', () => {
-    it('resolves against the cwd option', async () => {
+    it('resolves against the cwd option, and reports matches relative to it', async () => {
       const scoped = new Glob({ fs, cwd: root });
 
-      expect(relative(await scoped.expand('*.js'))).toEqual(['a.js']);
-      expect(relative(await scoped.expand('sub/*.js'))).toEqual(['sub/c.js']);
+      expect((await scoped.expand('*.js')).toSorted()).toEqual(['a.js']);
+      expect((await scoped.expand('sub/*.js')).toSorted()).toEqual(['sub/c.js']);
+    });
+
+    it('strips the cwd even when the pattern names no wildcard', async () => {
+      const scoped = new Glob({ fs, cwd: root });
+
+      expect(await scoped.expand('sub/c.js')).toEqual(['sub/c.js']);
+      expect(await scoped.expand('missing.js')).toEqual([]);
+    });
+
+    it('tolerates a cwd written with a trailing separator', async () => {
+      const scoped = new Glob({ fs, cwd: `${root}/` });
+
+      expect((await scoped.expand('*.js')).toSorted()).toEqual(['a.js']);
     });
 
     it('supports `**` relative to the cwd', async () => {
       const scoped = new Glob({ fs, cwd: root });
 
-      expect(relative(await scoped.expand('**/*.js'))).toEqual([
+      expect((await scoped.expand('**/*.js')).toSorted()).toEqual([
         'a.js',
         'other/e.js',
         'sub/c.js',
@@ -126,11 +139,84 @@ describe('Glob', () => {
       ]);
     });
 
+    it('omits the cwd itself from a trailing `**`', async () => {
+      const scoped = new Glob({ fs, cwd: root });
+
+      // bash lists everything below, but never `.` for the directory itself
+      expect((await scoped.expand('**')).toSorted()).toEqual([
+        'a.js',
+        'b.txt',
+        'other',
+        'other/e.js',
+        'sub',
+        'sub/c.js',
+        'sub/nested',
+        'sub/nested/d.js',
+      ]);
+    });
+
+    it('keeps a leading `./` the way bash does', async () => {
+      const scoped = new Glob({ fs, cwd: root });
+
+      expect((await scoped.expand('./*.js')).toSorted()).toEqual(['./a.js']);
+      expect((await scoped.expand('./**/*.js')).toSorted()).toEqual([
+        './a.js',
+        './other/e.js',
+        './sub/c.js',
+        './sub/nested/d.js',
+      ]);
+    });
+
+    it('keeps a leading `../` the way bash does', async () => {
+      const scoped = new Glob({ fs, cwd: `${root}/sub` });
+
+      expect((await scoped.expand('../*')).toSorted()).toEqual([
+        '../a.js',
+        '../b.txt',
+        '../other',
+        '../sub',
+      ]);
+      expect((await scoped.expand('../*.js')).toSorted()).toEqual(['../a.js']);
+    });
+
+    it('resolves a bare `.` and `..`', async () => {
+      const scoped = new Glob({ fs, cwd: `${root}/sub` });
+
+      expect(await scoped.expand('.')).toEqual(['.']);
+      expect(await scoped.expand('..')).toEqual(['..']);
+    });
+
+    it('resolves `.` and `..` reached through a wildcard', async () => {
+      const scoped = new Glob({ fs, cwd: root });
+
+      // readdir never reports `.` or `..`, so these only work if the walk
+      // treats them as a move rather than as an entry to match
+      expect((await scoped.expand('*/../*.js')).toSorted()).toEqual([
+        'other/../a.js',
+        'sub/../a.js',
+      ]);
+      expect((await scoped.expand('*/.')).toSorted()).toEqual(['other/.', 'sub/.']);
+      expect((await scoped.expand('sub/./*')).toSorted()).toEqual(['sub/./c.js', 'sub/./nested']);
+      expect((await scoped.expand('**/..')).toSorted()).toEqual([
+        '..',
+        'other/..',
+        'sub/..',
+        'sub/nested/..',
+      ]);
+    });
+
+    it('leaves an absolute pattern absolute', async () => {
+      const scoped = new Glob({ fs, cwd: root });
+
+      // the cwd anchors relative patterns only, so it is not stripped here
+      expect(await scoped.expand(`${root}/sub/*.js`)).toEqual([`${root}/sub/c.js`]);
+    });
+
     it('defaults the cwd to the process working directory marker', async () => {
       const scoped = new Glob({ fs });
 
-      // no cwd given, so patterns resolve against '.'
-      expect(await scoped.expand('package.json')).toEqual(['./package.json']);
+      // no cwd given, so patterns resolve against '.' — which is stripped too
+      expect(await scoped.expand('package.json')).toEqual(['package.json']);
     });
 
     it('adds no prefix at all when the cwd is empty', async () => {

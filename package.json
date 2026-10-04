@@ -1,7 +1,7 @@
 {
   "name": "isomorphic-glob",
-  "version": "0.1.0",
-  "description": "Bash-like glob implementation in pure TypeScript",
+  "version": "0.2.0",
+  "description": "Zero dependency, Bash-like glob implementation in pure TypeScript",
   "keywords": [
     "glob",
     "globbing",

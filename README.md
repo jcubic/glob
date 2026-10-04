@@ -2,7 +2,7 @@
 
 # Isomorphic-glob
 
-[![npm](https://img.shields.io/badge/npm-0.1.0-yellow.svg)](https://www.npmjs.com/package/isomorphic-glob)
+[![npm](https://img.shields.io/badge/npm-0.2.0-yellow.svg)](https://www.npmjs.com/package/isomorphic-glob)
 [![github repo](https://img.shields.io/badge/github-repo-orange?logo=github)](https://github.com/jcubic/isomorphic-glob)
 [![CI](https://github.com/jcubic/glob/actions/workflows/test.yml/badge.svg)](https://github.com/jcubic/glob/actions/workflows/test.yml)
 [![Coverage Status](https://coveralls.io/repos/github/jcubic/glob/badge.svg?branch=master)](https://coveralls.io/github/jcubic/glob?branch=master)
@@ -10,7 +10,7 @@
 
 </div>
 
-Isomorphic glob implementation in pure TypeScript, with no runtime dependencies.
+Zero dependency, Isomorphic glob implementation in pure TypeScript.
 
 ## What is a glob?
 
@@ -170,10 +170,10 @@ relative (`src/**/*.ts`), in which case it resolves against `cwd`.
 
 ### new Glob(options)
 
-| Option | Type     | Description                                                     |
-| ------ | -------- | --------------------------------------------------------------- |
-| `fs`   | `GlobFs` | **Required.** The filesystem to search.                         |
-| `cwd`  | `string` | Directory relative patterns resolve against. Defaults to `'.'`. |
+| Option | Type     | Description                                                                                   |
+| ------ | -------- | --------------------------------------------------------------------------------------------- |
+| `fs`   | `GlobFs` | **Required.** The filesystem to search.                                                       |
+| `cwd`  | `string` | Directory relative patterns resolve against, and are reported relative to. Defaults to `'.'`. |
 
 Throws a `TypeError` if `fs` is missing or does not provide `readdir` and `stat`.
 
@@ -185,6 +185,8 @@ Find every path matching `pattern`. Returns `Promise<string[]>`.
 const files = await glob.expand('/project/**/*.js');
 ```
 
+- An absolute pattern yields absolute paths; a relative one yields paths relative to `cwd`, the way
+  a shell reports them. See [Relative patterns](#relative-patterns).
 - Rejects with the underlying filesystem error if the directory the search starts from cannot be
   read.
 - A directory that cannot be read _during_ the walk contributes no matches instead of failing the
@@ -238,13 +240,42 @@ expansion results are verified against real bash output.
 
 ### Relative patterns
 
-A pattern without a leading `/` or drive is relative, and resolves against `cwd`:
+A pattern without a leading `/` or drive is relative, and resolves against `cwd`. The matches come
+back relative to `cwd` as well — the base the pattern was anchored to is not part of the answer,
+exactly as `cd /home/user/project && echo src/**/*.ts` would report it:
 
 ```js
 const glob = new Glob({ fs, cwd: '/home/user/project' });
 
-await glob.expand('src/**/*.ts');
+await glob.expand('src/**/*.ts'); //=> ['src/index.ts', 'src/lib/util.ts']
+await glob.expand('*'); //=> ['package.json', 'src']
 ```
+
+Join them back onto `cwd` yourself if you need absolute paths. The `cwd` anchors relative patterns
+only, so an absolute pattern still yields absolute paths even when `cwd` is set:
+
+```js
+await glob.expand('/home/user/project/src/*.ts'); //=> ['/home/user/project/src/index.ts']
+```
+
+A trailing `**` lists everything below `cwd`, but not `cwd` itself — bash does not list `.` there
+either.
+
+### `.` and `..`
+
+Both are kept in the result rather than resolved away, which is what a shell prints:
+
+```js
+const glob = new Glob({ fs, cwd: '/home/user/project' });
+
+await glob.expand('./*.ts'); //=> ['./index.ts']
+await glob.expand('../*.ts'); //=> ['../other.ts']
+await glob.expand('*/../*.ts'); //=> ['src/../index.ts']
+```
+
+They are a move between directories, not a name to match, so only the literal text counts — `[.]`
+and `{.,x}` do not expand onto them, matching bash. The filesystem resolves them, so one that
+reports `..` of a root differently to the local one will differ here too.
 
 `match()` compares a relative pattern against a relative string, with no `cwd` involved:
 
@@ -283,7 +314,7 @@ enforced rather than just documented.
 ## License
 
 Copyright (c) 2026 [Jakub T. Jankiewicz](https://jakub.jankiewicz.org/)<br/>
-Copyright (c) 2013 Kevin Thompson
+Copyright (c) 2013 [Kevin Thompson](https://github.com/kthompson)
 
 Released under the MIT License. See [LICENSE](https://github.com/jcubic/glob/blob/master/LICENSE)
 for details.

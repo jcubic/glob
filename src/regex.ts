@@ -11,11 +11,21 @@ export const SEPARATOR = '[/\\\\]';
 /** Matches any character that is not a path separator. */
 export const NOT_SEPARATOR = '[^/\\\\]';
 
+/**
+ * Guards a path portion against starting with a dot. `**` is never written
+ * with a leading dot, so every level it crosses carries one of these.
+ */
+export const NOT_DOT = '(?!\\.)';
+
 /** `**` with more segments after it — consumes whole levels, separator included. */
-export const GLOBSTAR = `(?:${NOT_SEPARATOR}+${SEPARATOR})*`;
+export function globstar(dot: boolean): string {
+  return `(?:${dot ? '' : NOT_DOT}${NOT_SEPARATOR}+${SEPARATOR})*`;
+}
 
 /** `**` at the end of a pattern — zero or more levels below what precedes it. */
-export const GLOBSTAR_TRAILING = `(?:${SEPARATOR}${NOT_SEPARATOR}+)*`;
+export function globstarTrailing(dot: boolean): string {
+  return `(?:${SEPARATOR}${dot ? '' : NOT_DOT}${NOT_SEPARATOR}+)*`;
+}
 
 const SPECIAL = /[.*+?^${}()|[\]\\]/g;
 

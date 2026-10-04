@@ -162,6 +162,7 @@ new Glob({ fs: memfs as unknown as GlobFs });
 | `{a,b}`  | any one of the comma separated alternatives          |
 | `/`, `\` | path separator — both are accepted on every platform |
 | `c:/`    | a Windows drive root                                 |
+| `dir/`   | a trailing separator matches directories only        |
 
 A pattern may be absolute — POSIX (`/usr/lib/*.so`) or a Windows drive (`c:/windows/*.dll`) — or
 relative (`src/**/*.ts`), in which case it resolves against `cwd`.
@@ -170,10 +171,11 @@ relative (`src/**/*.ts`), in which case it resolves against `cwd`.
 
 ### new Glob(options)
 
-| Option | Type     | Description                                                                                   |
-| ------ | -------- | --------------------------------------------------------------------------------------------- |
-| `fs`   | `GlobFs` | **Required.** The filesystem to search.                                                       |
-| `cwd`  | `string` | Directory relative patterns resolve against, and are reported relative to. Defaults to `'.'`. |
+| Option | Type      | Description                                                                                   |
+| ------ | --------- | --------------------------------------------------------------------------------------------- |
+| `fs`   | `GlobFs`  | **Required.** The filesystem to search.                                                       |
+| `cwd`  | `string`  | Directory relative patterns resolve against, and are reported relative to. Defaults to `'.'`. |
+| `dot`  | `boolean` | Let a wildcard match entries starting with a `.`. Defaults to `false`.                        |
 
 Throws a `TypeError` if `fs` is missing or does not provide `readdir` and `stat`.
 
@@ -195,13 +197,24 @@ const files = await glob.expand('/project/**/*.js');
   not.
 - The order of the result is not specified. Sort it if you need a stable order.
 
-### match(pattern, str)
+### match(pattern, str, options?)
 
 Test whether `str` matches `pattern`. Returns `boolean`. No filesystem is touched, so this needs no
 `Glob` instance and runs in any environment.
 
 ```js
 const isMatch = match('/dev/sd[abcd]1', '/dev/sdb1');
+```
+
+| Option | Type      | Description                                                             |
+| ------ | --------- | ----------------------------------------------------------------------- |
+| `dot`  | `boolean` | Let a wildcard match portions starting with a `.`. Defaults to `false`. |
+
+It applies the same [dotfile rule](#dotfiles) as `expand()`, so the two agree on any path:
+
+```js
+match('*', '.env'); //=> false
+match('*', '.env', { dot: true }); //=> true
 ```
 
 ### Parser internals
@@ -215,12 +228,17 @@ import { Parser, Scanner, Token, TokenKind, Ast } from 'isomorphic-glob';
 const path = new Parser('/hello/**/you?/*.rb').parse();
 
 path.text(); //=> '/hello/**/you?/*.rb'
-path.toString(); //=> '^[/\\]hello[/\\](?:[^/\\]+[/\\])*you[^/\\][/\\][^/\\]*\.rb$'
+path.toString(); //=> '^[/\\](?!\.)hello[/\\](?:(?!\.)[^/\\]+[/\\])*(?!\.)you[^/\\][/\\](?!\.)[^/\\]*\.rb$'
 path.items[2] instanceof Ast.WildcardSegment; //=> true
 ```
 
 `Path#toString()` returns an **anchored** expression, so `new RegExp(path.toString())` behaves the
-same way `match()` does.
+same way `match()` does. That is why each portion carries a `(?!\.)`: it is the
+[dotfile rule](#dotfiles), compiled in. `toString({ dot: true })` leaves the guards out:
+
+```js
+path.toString({ dot: true }); //=> '^[/\\]hello[/\\](?:[^/\\]+[/\\])*you[^/\\][/\\][^/\\]*\.rb$'
+```
 
 ## Matching rules
 
@@ -260,6 +278,49 @@ await glob.expand('/home/user/project/src/*.ts'); //=> ['/home/user/project/src/
 
 A trailing `**` lists everything below `cwd`, but not `cwd` itself — bash does not list `.` there
 either.
+
+### Dotfiles
+
+A wildcard does not match an entry whose name starts with a `.`, and `**` does not descend into
+one. A segment **written with a leading dot** does match them, whatever the option says — the same
+rule bash, [glob](https://github.com/isaacs/node-glob) and
+[fast-glob](https://github.com/mrmlnc/fast-glob) follow:
+
+```js
+await glob.expand('*'); //=> ['index.ts', 'src']      no .env, no .git
+await glob.expand('.*'); //=> ['.env', '.git']
+await glob.expand('.hidden/*'); //=> ['.hidden/f.js']  named outright, so it is searched
+```
+
+The dot has to be literal text at the front of the segment. A set is not an explicit dot, so
+`[.]env` matches nothing, exactly as in bash — write `.[e]nv` or `.{env,bashrc}` instead.
+
+Pass `dot: true` to lift the restriction everywhere, the equivalent of bash's `shopt -s dotglob`:
+
+```js
+const glob = new Glob({ fs, dot: true });
+
+await glob.expand('*'); //=> ['.env', '.git', 'index.ts', 'src']
+```
+
+[`match()`](#matchpattern-str-options) and `Path#toString()` take the same option and apply the
+same rule, so all three agree on any given path.
+
+### Trailing separator
+
+A pattern written with a trailing separator matches directories only, and the matches keep that
+separator — again what bash prints:
+
+```js
+await glob.expand('*/'); //=> ['other/', 'src/']
+await glob.expand('**/'); //=> ['other/', 'src/', 'src/lib/']
+await glob.expand('*/*/'); //=> ['src/lib/']
+await glob.expand('index.ts/'); //=> []  a file is no directory, however it is written
+```
+
+An absolute `**/` reports the directory it starts from, `/project/**/` → `/project/`, while a
+relative one does not report the cwd — bash lists no `./` there either. `match()` agrees with the
+result, so `match('*/', 'src/')` is `true` and `match('*/', 'src')` is `false`.
 
 ### `.` and `..`
 

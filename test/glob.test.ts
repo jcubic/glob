@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { Glob } from '../src/glob.js';
+import { match } from '../src/match.js';
 
 let root: string;
 let glob: Glob;
@@ -18,6 +19,7 @@ beforeAll(async () => {
 
   await fs.promises.mkdir(path.join(root, 'sub', 'nested'), { recursive: true });
   await fs.promises.mkdir(path.join(root, 'other'), { recursive: true });
+  await fs.promises.mkdir(path.join(root, '.hidden'), { recursive: true });
 
   await Promise.all([
     fs.promises.writeFile(path.join(root, 'a.js'), ''),
@@ -25,6 +27,8 @@ beforeAll(async () => {
     fs.promises.writeFile(path.join(root, 'sub', 'c.js'), ''),
     fs.promises.writeFile(path.join(root, 'sub', 'nested', 'd.js'), ''),
     fs.promises.writeFile(path.join(root, 'other', 'e.js'), ''),
+    fs.promises.writeFile(path.join(root, '.env'), ''),
+    fs.promises.writeFile(path.join(root, '.hidden', 'f.js'), ''),
   ]);
 });
 
@@ -93,6 +97,121 @@ describe('Glob', () => {
 
     it('rejects when the directory to search does not exist', async () => {
       await expect(glob.expand(`${root}/nope/*.js`)).rejects.toMatchObject({ code: 'ENOENT' });
+    });
+
+    describe('a pattern ending in a separator', () => {
+      it('matches directories only, and keeps the separator bash prints', async () => {
+        expect((await glob.expand(`${root}/*/`)).toSorted()).toEqual([
+          `${root}/other/`,
+          `${root}/sub/`,
+        ]);
+      });
+
+      it('includes the directory a `**` starts from', async () => {
+        expect((await glob.expand(`${root}/**/`)).toSorted()).toEqual([
+          `${root}/`,
+          `${root}/other/`,
+          `${root}/sub/`,
+          `${root}/sub/nested/`,
+        ]);
+      });
+
+      it('descends a level per wildcard', async () => {
+        expect(await glob.expand(`${root}/*/*/`)).toEqual([`${root}/sub/nested/`]);
+      });
+
+      it('resolves a literal directory', async () => {
+        expect(await glob.expand(`${root}/sub/`)).toEqual([`${root}/sub/`]);
+      });
+
+      it('rejects a file, which is no directory however it is written', async () => {
+        expect(await glob.expand(`${root}/a.js/`)).toEqual([]);
+        expect(await glob.expand(`${root}/*.js/`)).toEqual([]);
+      });
+    });
+
+    describe('an entry starting with a dot', () => {
+      it('is not matched by a wildcard', async () => {
+        expect(relative(await glob.expand(`${root}/*`))).toEqual(['a.js', 'b.txt', 'other', 'sub']);
+        expect((await glob.expand(`${root}/*/`)).toSorted()).toEqual([
+          `${root}/other/`,
+          `${root}/sub/`,
+        ]);
+      });
+
+      it('is matched by a segment written with a leading dot', async () => {
+        expect(relative(await glob.expand(`${root}/.*`))).toEqual(['.env', '.hidden']);
+        expect(relative(await glob.expand(`${root}/.[e]nv`))).toEqual(['.env']);
+        expect((await glob.expand(`${root}/.*/`)).toSorted()).toEqual([`${root}/.hidden/`]);
+      });
+
+      it('needs that dot to be literal, as bash does', async () => {
+        // bash leaves `[.]env` unmatched: a set is no explicit dot
+        expect(await glob.expand(`${root}/[.]env`)).toEqual([]);
+      });
+
+      it('is judged the same way by match()', async () => {
+        const pattern = `${root}/*`;
+
+        expect((await glob.expand(pattern)).every((found) => match(pattern, found))).toBe(true);
+        expect(match(pattern, `${root}/.env`)).toBe(false);
+        expect(match(pattern, `${root}/.env`, { dot: true })).toBe(true);
+      });
+
+      it('is reachable as a literal directory', async () => {
+        expect(relative(await glob.expand(`${root}/.hidden/*`))).toEqual(['.hidden/f.js']);
+      });
+
+      it('is not descended into by `**`', async () => {
+        expect(relative(await glob.expand(`${root}/**/*.js`))).toEqual([
+          'a.js',
+          'other/e.js',
+          'sub/c.js',
+          'sub/nested/d.js',
+        ]);
+      });
+
+      describe('with the dot option', () => {
+        let dotted: Glob;
+
+        beforeAll(() => {
+          dotted = new Glob({ fs, dot: true });
+        });
+
+        it('is matched by a wildcard', async () => {
+          expect(relative(await dotted.expand(`${root}/*`))).toEqual([
+            '.env',
+            '.hidden',
+            'a.js',
+            'b.txt',
+            'other',
+            'sub',
+          ]);
+        });
+
+        it('is descended into by `**`', async () => {
+          expect(relative(await dotted.expand(`${root}/**/*.js`))).toEqual([
+            '.hidden/f.js',
+            'a.js',
+            'other/e.js',
+            'sub/c.js',
+            'sub/nested/d.js',
+          ]);
+        });
+
+        it('is reported by a trailing separator', async () => {
+          expect((await dotted.expand(`${root}/*/`)).toSorted()).toEqual([
+            `${root}/.hidden/`,
+            `${root}/other/`,
+            `${root}/sub/`,
+          ]);
+        });
+
+        it('lifts the restriction entirely, so even a set reaches it', async () => {
+          // bash with `shopt -s dotglob` matches `[.]env` too
+          expect(relative(await dotted.expand(`${root}/[.]env`))).toEqual(['.env']);
+        });
+      });
     });
 
     describe('a pattern with no wildcard', () => {
@@ -203,6 +322,31 @@ describe('Glob', () => {
         'sub/..',
         'sub/nested/..',
       ]);
+    });
+
+    it('matches directories only when it ends in a separator', async () => {
+      const scoped = new Glob({ fs, cwd: root });
+
+      expect((await scoped.expand('*/')).toSorted()).toEqual(['other/', 'sub/']);
+      expect(await scoped.expand('*/*/')).toEqual(['sub/nested/']);
+      expect(await scoped.expand('sub/')).toEqual(['sub/']);
+      expect(await scoped.expand('a.js/')).toEqual([]);
+      expect((await scoped.expand('./*/')).toSorted()).toEqual(['./other/', './sub/']);
+    });
+
+    it('keeps the separator on a `.` or `..` reached through a wildcard', async () => {
+      const scoped = new Glob({ fs, cwd: root });
+
+      expect((await scoped.expand('*/./')).toSorted()).toEqual(['other/./', 'sub/./']);
+      expect((await scoped.expand('*/../')).toSorted()).toEqual(['other/../', 'sub/../']);
+      expect(await scoped.expand('./')).toEqual(['./']);
+    });
+
+    it('omits the cwd from a `**` ending in a separator', async () => {
+      const scoped = new Glob({ fs, cwd: root });
+
+      // bash lists no `./` here, the same way a bare `**` lists no `.`
+      expect((await scoped.expand('**/')).toSorted()).toEqual(['other/', 'sub/', 'sub/nested/']);
     });
 
     it('leaves an absolute pattern absolute', async () => {

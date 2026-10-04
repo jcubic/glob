@@ -1,5 +1,5 @@
 import { Segment } from './segment.js';
-import { GLOBSTAR } from '../regex.js';
+import { globstar } from '../regex.js';
 
 /**
  * The `**` segment, which matches any number of directory levels — including
@@ -22,7 +22,11 @@ export class WildcardSegment extends Segment {
     return true;
   }
 
-  override toString(): string {
-    return GLOBSTAR;
+  /**
+   * @param dot let the levels crossed start with a dot. Off by default, the
+   * way `**` behaves in bash and in {@link Glob}.
+   */
+  override toString(dot = false): string {
+    return globstar(dot);
   }
 }

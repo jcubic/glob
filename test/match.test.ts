@@ -36,6 +36,44 @@ describe('match', () => {
     expect(match('/a/b.c', '/a/bXc')).toBe(false);
   });
 
+  it('requires the trailing separator a pattern was written with', () => {
+    // so a `*/` match round trips: every path expand() reports for it, this
+    // accepts
+    expect(match('/a/*/', '/a/b/')).toBe(true);
+    expect(match('/a/*/', '/a/b')).toBe(false);
+  });
+
+  describe('a path portion starting with a dot', () => {
+    it('is not matched by a wildcard, the same rule expand() follows', () => {
+      expect(match('*', '.env')).toBe(false);
+      expect(match('/a/*', '/a/.env')).toBe(false);
+      expect(match('/a/**/*.js', '/a/.hidden/f.js')).toBe(false);
+      expect(match('/a/**', '/a/.hidden')).toBe(false);
+    });
+
+    it('is matched by a segment written with a leading dot', () => {
+      expect(match('.*', '.env')).toBe(true);
+      expect(match('.[e]nv', '.env')).toBe(true);
+      expect(match('/a/.*', '/a/.env')).toBe(true);
+    });
+
+    it('needs that dot to be literal, as bash does', () => {
+      expect(match('[.]env', '.env')).toBe(false);
+    });
+
+    it('leaves a visible path alone', () => {
+      expect(match('*', 'a.js')).toBe(true);
+      expect(match('/a/**/*.js', '/a/sub/f.js')).toBe(true);
+    });
+
+    it('is matched with the dot option', () => {
+      expect(match('*', '.env', { dot: true })).toBe(true);
+      expect(match('/a/**/*.js', '/a/.hidden/f.js', { dot: true })).toBe(true);
+      expect(match('/a/**', '/a/.hidden', { dot: true })).toBe(true);
+      expect(match('[.]env', '.env', { dot: true })).toBe(true);
+    });
+  });
+
   it('performs no filesystem access, so patterns need not exist', () => {
     expect(match('/no/such/place/*.js', '/no/such/place/x.js')).toBe(true);
   });

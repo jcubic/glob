@@ -1,5 +1,5 @@
 export { Glob, type GlobOptions } from './glob.js';
-export { match } from './match.js';
+export { match, type MatchOptions } from './match.js';
 export type { GlobFs, GlobFsModule, GlobFsPromises, GlobStats } from './fs.js';
 
 // lower level building blocks, for callers that want the AST instead of matches

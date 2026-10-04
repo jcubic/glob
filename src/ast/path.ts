@@ -2,7 +2,20 @@ import type { GlobNode } from './node.js';
 import type { Segment } from './segment.js';
 import { Root } from './root.js';
 import { WildcardSegment } from './wildcardsegment.js';
-import { GLOBSTAR_TRAILING, SEPARATOR } from '../regex.js';
+import { NOT_DOT, SEPARATOR, globstarTrailing } from '../regex.js';
+
+/**
+ * Options accepted when compiling a {@link Path} to a regular expression.
+ */
+export interface PathRegExpOptions {
+  /**
+   * Let a wildcard match a path portion starting with a `.`. Defaults to
+   * `false`, so the compiled expression agrees with `match()` and with
+   * `Glob#expand()`. A portion written with a leading dot matches those
+   * either way.
+   */
+  dot?: boolean | undefined;
+}
 
 /**
  * A whole parsed pattern: a {@link Root} followed by its {@link Segment}s.
@@ -35,8 +48,13 @@ export class Path implements GlobNode {
    *
    * Anchored deliberately: an unanchored fragment would report a match for any
    * string merely *containing* one, so `/tmp/*.js` would accept `/tmp/a.jsx`.
+   *
+   * A path portion starting with a `.` is matched only where the pattern says
+   * so outright, unless `dot` is set — the rule bash follows, and the one
+   * `match()` and `Glob#expand()` apply, so the three agree.
    */
-  toString(): string {
+  toString(options?: PathRegExpOptions): string {
+    const dot = options?.dot ?? false;
     const segments = this.#segments();
     let source = this.#root().toString();
     let separator = this.#opensWithSeparator();
@@ -45,7 +63,7 @@ export class Path implements GlobNode {
       if (segment instanceof WildcardSegment) {
         if (index === segments.length - 1) {
           // nothing follows, so `**` covers zero or more levels below here
-          source += GLOBSTAR_TRAILING;
+          source += globstarTrailing(dot);
           separator = false;
           return;
         }
@@ -55,13 +73,18 @@ export class Path implements GlobNode {
         if (separator) {
           source += SEPARATOR;
         }
-        source += segment.toString();
+        source += segment.toString(dot);
         separator = false;
         return;
       }
 
       if (separator) {
         source += SEPARATOR;
+      }
+      // the dot has to be literal text at the front of the portion, so `[.]x`
+      // is no more explicit than `*` — which is how bash reads it too
+      if (!dot && !segment.text().startsWith('.')) {
+        source += NOT_DOT;
       }
       source += segment.toString();
       separator = true;

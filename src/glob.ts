@@ -15,6 +15,12 @@ export interface GlobOptions {
    * Directory that relative patterns resolve against. Defaults to `'.'`.
    */
   cwd?: string | undefined;
+  /**
+   * Let a wildcard match an entry whose name starts with a `.`. Defaults to
+   * `false`, the way bash, glob and fast-glob all behave. A segment written
+   * with a leading dot matches those entries whatever this is set to.
+   */
+  dot?: boolean | undefined;
 }
 
 /**
@@ -28,6 +34,7 @@ export interface GlobOptions {
 export class Glob {
   readonly #fs: GlobFsPromises;
   readonly #cwd: string;
+  readonly #dot: boolean;
 
   constructor(options: GlobOptions) {
     if (!options?.fs) {
@@ -36,6 +43,7 @@ export class Glob {
 
     this.#fs = toPromises(options.fs);
     this.#cwd = options.cwd ?? '.';
+    this.#dot = options.dot ?? false;
   }
 
   /**
@@ -53,6 +61,15 @@ export class Glob {
   async expand(pattern: string): Promise<string[]> {
     const path = new Parser(pattern, { cwd: this.#cwd }).parse();
     const segments = [...path.items];
+
+    // a pattern written with a trailing separator parses to an empty segment
+    // at the end. it names no entry: it asks for directories only, and bash
+    // keeps the separator it was written with in the result
+    let directories = false;
+    while (segments.length > 1 && isEmpty(segments[segments.length - 1] as Segment)) {
+      segments.pop();
+      directories = true;
+    }
 
     // the leading literal segments are not searched, they are where the walk
     // starts. they are taken as source text, not as the compiled regex, so that
@@ -110,10 +127,14 @@ export class Glob {
     // nothing to expand — the pattern either names an existing path or matches
     // nothing at all
     if (segments.length === 0) {
+      if (directories) {
+        return (await this.#isDirectory(from)) ? [withSlash(shown)] : [];
+      }
+
       return (await this.#exists(from)) ? [shown] : [];
     }
 
-    return this.#walk(from, shown, segments);
+    return this.#walk(from, shown, segments, directories);
   }
 
   async #exists(path: string): Promise<boolean> {
@@ -137,17 +158,30 @@ export class Glob {
    * Walk `dir`, reporting whatever matches under the name `as` — the same
    * directory as the caller asked for it, which for a relative pattern is the
    * empty string for the cwd itself.
+   *
+   * `directories` carries a trailing separator down the walk: it narrows the
+   * final match to directories, and names them with the separator.
    */
-  async #walk(dir: string, as: string, segments: Segment[]): Promise<string[]> {
+  async #walk(
+    dir: string,
+    as: string,
+    segments: Segment[],
+    directories: boolean,
+  ): Promise<string[]> {
     const [segment, ...rest] = segments as [Segment, ...Segment[]];
 
-    return this.#collect(dir, as, segment, rest, await this.#fs.readdir(dir));
+    return this.#collect(dir, as, segment, rest, await this.#fs.readdir(dir), directories);
   }
 
   /** A branch we cannot read simply contributes no matches. */
-  async #subwalk(dir: string, as: string, segments: Segment[]): Promise<string[]> {
+  async #subwalk(
+    dir: string,
+    as: string,
+    segments: Segment[],
+    directories: boolean,
+  ): Promise<string[]> {
     try {
-      return await this.#walk(dir, as, segments);
+      return await this.#walk(dir, as, segments, directories);
     } catch {
       return [];
     }
@@ -165,6 +199,7 @@ export class Glob {
     segment: Segment,
     rest: Segment[],
     entries: string[],
+    directories: boolean,
   ): Promise<string[]> {
     const results: string[] = [];
 
@@ -175,21 +210,25 @@ export class Glob {
         // `**` last: everything from here down, this directory included —
         // except the cwd itself, which bash does not list as `.` either
         if (as !== '') {
-          results.push(as);
+          results.push(directories ? withSlash(as) : as);
         }
       } else {
         // `**` matches zero levels, so the rest of the pattern applies here too
-        results.push(...(await this.#collect(dir, as, next, beyond, entries)));
+        results.push(...(await this.#collect(dir, as, next, beyond, entries, directories)));
       }
 
+      // `**` is never written with a leading dot, so it reaches a hidden entry
+      // only when the option says so — and it does not descend into one either
       await Promise.all(
-        entries.map(async (entry) => {
+        visible(entries, this.#dot).map(async (entry) => {
           const file = withSlash(dir) + entry;
 
           if (await this.#isDirectory(file)) {
             // ...and one level or more, by descending with the `**` retained
-            results.push(...(await this.#subwalk(file, join(as, entry), [segment, ...rest])));
-          } else if (next === undefined) {
+            results.push(
+              ...(await this.#subwalk(file, join(as, entry), [segment, ...rest], directories)),
+            );
+          } else if (next === undefined && !directories) {
             results.push(join(as, entry));
           }
         }),
@@ -204,38 +243,66 @@ export class Glob {
     const text = segment.text();
     if (text === '.' || text === '..') {
       const file = withSlash(dir) + text;
+      const name = join(as, text);
 
       if (rest.length === 0) {
-        return [join(as, text)];
+        return [directories ? withSlash(name) : name];
       }
 
-      return this.#subwalk(file, join(as, text), rest);
+      return this.#subwalk(file, name, rest, directories);
     }
 
     // anchored, so a segment pattern has to match the whole entry name
     const re = new RegExp(`^(?:${segment.toString()})$`);
 
+    // a hidden entry needs the dot spelled out at the front of the segment.
+    // the source text is what counts, not the compiled regex, so `[.]env` is
+    // no more explicit than `*` — which is how bash reads it too
+    const dot = this.#dot || text.startsWith('.');
+
     await Promise.all(
-      entries.map(async (entry) => {
+      visible(entries, dot).map(async (entry) => {
         if (!re.test(entry)) {
           return;
         }
 
         const file = withSlash(dir) + entry;
+        const name = join(as, entry);
 
         if (rest.length === 0) {
-          results.push(join(as, entry));
+          if (!directories) {
+            results.push(name);
+            return;
+          }
+
+          if (await this.#isDirectory(file)) {
+            results.push(withSlash(name));
+          }
           return;
         }
 
         if (await this.#isDirectory(file)) {
-          results.push(...(await this.#subwalk(file, join(as, entry), rest)));
+          results.push(...(await this.#subwalk(file, name, rest, directories)));
         }
       }),
     );
 
     return results;
   }
+}
+
+/** The entries a pattern may see, which excludes the hidden ones by default. */
+function visible(entries: string[], dot: boolean): string[] {
+  return dot ? entries : entries.filter((entry) => !entry.startsWith('.'));
+}
+
+/**
+ * True for the segment a trailing separator leaves behind. A root is never
+ * one, however empty it looks: `/` is a path, not a path with a trailing
+ * separator.
+ */
+function isEmpty(segment: Segment): boolean {
+  return !(segment instanceof Root) && !segment.isWildcard() && segment.text() === '';
 }
 
 /**
